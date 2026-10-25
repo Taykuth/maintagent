@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+data/raw/*.csv
+data/*.duckdb
+data/*.duckdb.wal
+models/*
+!models/.gitkeep

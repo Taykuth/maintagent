@@ -1,0 +1,22 @@
+"""Proje genelindeki ayarlar. Değerler .env dosyasından okunur."""
+
+import os
+from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+RAW_DIR = Path(os.getenv("RAW_DIR", ROOT_DIR / "data" / "raw"))
+DB_PATH = Path(os.getenv("DB_PATH", ROOT_DIR / "data" / "maintagent.duckdb"))
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Uygulamanın "şu an" kabul ettiği an. Veri 2015 yılına ait olduğu için
+# gerçek saati kullanamayız. Tüm araçlar bu tarihten SONRAKİ veriyi görmemeli,
+# yoksa model ve ajan geleceği görür (veri sızıntısı).
+AS_OF = datetime.fromisoformat(os.getenv("AS_OF", "2015-10-01 00:00:00"))
