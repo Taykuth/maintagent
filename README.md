@@ -34,3 +34,13 @@ python scripts/ask.py "Makine 20 neden riskli, ne yapmalıyım?"   # agent in th
 python scripts/eval_retrieval.py                                 # compare manual search methods
 uvicorn maintagent.api:create_app --factory --reload             # API on http://localhost:8000 (docs: /docs)
 ```
+
+The dashboard (Next.js) needs Node.js 20+ and the API running:
+
+```bash
+cd frontend
+npm install
+npm run dev                                                      # http://localhost:3000
+```
+
+Set `NEXT_PUBLIC_API_URL` (see `frontend/.env.example`) if the API is not on `http://localhost:8000`.

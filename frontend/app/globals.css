@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/*
+  Tasarım ilkesi: endüstriyel kontrol ekranı (ISA-101 "yüksek performanslı HMI").
+  Normal durum gri ve sessizdir; renk yalnızca anormal duruma verilir.
+  Böylece göz, 100 makine arasında arızaya yaklaşan birkaç makineye gider.
+*/
+@theme {
+  --color-page: #171b20;
+  --color-panel: #1e2329;
+  --color-raised: #262c33;
+  --color-line: #333b44;
+  --color-line-strong: #46505b;
+
+  --color-ink: #e7eaee;
+  --color-ink-2: #aab3bd;
+  --color-ink-3: #8b95a1;
+
+  /* Sensör izi: bilerek düşük doygunlukta; normal veri dikkat çekmemeli. */
+  --color-trace: #7fb0e6;
+
+  /* Alarm renkleri: sadece durum anlatır, asla süs ya da seri rengi değildir.
+     Her zaman ikon ve metinle birlikte kullanılır. */
+  --color-critical: #e5534b;
+  --color-serious: #ec835a;
+  --color-warning: #fab219;
+  --color-good: #0ca30c;
+
+  --font-sans: "Barlow", system-ui, sans-serif;
+  --font-cond: "Barlow Semi Condensed", "Barlow", system-ui, sans-serif;
+}
+
+html,
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Klavye ile gezinmede odak her zaman görünür. */
+:focus-visible {
+  outline: 2px solid var(--color-trace);
+  outline-offset: 2px;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* İnce, sessiz kaydırma çubukları */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+/* Ajan çalışırken etkin adımın nabzı: kullanıcının başlattığı tek hareket. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
