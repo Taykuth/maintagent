@@ -1,35 +1,20 @@
-"""Araçların doğru veri döndürdüğünü ve as_of sonrasını görmediğini kontrol eder."""
-
-import json
-import sys
-from datetime import datetime
-from pathlib import Path
+"""Araçların doğru veri döndürdüğünü, as_of sonrasını görmediğini ve ajan döngüsünü kontrol eder."""
 
 import pytest
+from conftest import AS_OF, ScriptedLLM, answer, call
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from maintagent import config  # noqa: E402
-from maintagent.agent import EVIDENCE_TOOLS, run_agent  # noqa: E402
-from maintagent.db import load_all  # noqa: E402
-from maintagent.features import build_features  # noqa: E402
-from maintagent.manual import ManualSearch, load_chunks  # noqa: E402
-from maintagent.model import save, train  # noqa: E402
-from maintagent.synthetic import write_synthetic_csvs  # noqa: E402
-from maintagent.tools import TOOL_SCHEMAS, Toolbox, describe_feature  # noqa: E402
-
-AS_OF = datetime(2015, 6, 15, 12)
+from maintagent import config
+from maintagent.agent import RateLimited, run_agent
+from maintagent.manual import ManualSearch, load_chunks
+from maintagent.tools import TOOL_SCHEMAS, Toolbox, describe_feature
+from maintagent.work_orders import WorkOrderStore
 
 
-@pytest.fixture(scope="module")
-def toolbox(tmp_path_factory):
-    d = tmp_path_factory.mktemp("data")
-    write_synthetic_csvs(d / "raw", n_machines=6, seed=3)
-    con = load_all(d / "raw", d / "t.duckdb")
-    model = train(build_features(con, datetime(2015, 1, 2), datetime(2015, 5, 1)))
-    save(model, {}, d / "models")
+@pytest.fixture
+def toolbox(synthetic_env, tmp_path):
+    con, model_dir = synthetic_env
     manual = ManualSearch(load_chunks(config.MANUAL_PATH), "bm25")
-    return Toolbox(con, d / "models", AS_OF, manual=manual)
+    return Toolbox(con, model_dir, AS_OF, manual=manual, orders=WorkOrderStore(tmp_path / "orders.sqlite"))
 
 
 def test_every_schema_has_a_method(toolbox):
@@ -64,9 +49,9 @@ def test_tools_do_not_see_the_future(toolbox):
         hist = toolbox.get_maintenance_history(1)
         comp1 = next(c for c in hist["bilesenler"] if c["bilesen"] == "comp1")
         assert comp1["son_degisim"] is None or comp1["son_degisim"] < "2015-06-15 13:00:00"
-        tele = toolbox.get_telemetry_summary(1, hours=24)
-        last_ts = con.execute("SELECT max(ts) FROM telemetry WHERE machine_id = 1 AND ts <= $a", {"a": AS_OF}).fetchone()[0]
-        assert last_ts <= AS_OF and tele["pencere_saat"] == 24
+        series = toolbox.telemetry_series(1, hours=48)
+        assert max(p["ts"] for p in series["points"]) <= "2015-06-15 12:00:00"
+        assert all(e["kod"] != "error9" for e in series["events"])
     finally:
         con.execute("DELETE FROM errors WHERE error_id = 'error9'")
         con.execute("DELETE FROM maint WHERE ts = '2015-06-15 13:00:00' AND machine_id = 1")
@@ -77,6 +62,14 @@ def test_risk_prediction(toolbox):
     assert 0 <= r["ariza_riski_24_saat_yuzde"] <= 100
     assert r["en_olasi_bilesen"] in {"comp1", "comp2", "comp3", "comp4"}
     assert len(r["riski_en_cok_artiran_3_etken"]) == 3
+
+
+def test_machine_report_combines_evidence(toolbox):
+    r = toolbox.get_machine_report(2)
+    assert set(r) == {"makine", "risk", "sensorler_son_24_saat", "normalden_belirgin_sapan",
+                      "hatalar_son_7_gun", "bilesen_degisimleri"}
+    assert set(r["sensorler_son_24_saat"]) == {"voltaj", "dönüş hızı", "basınç", "titreşim"}
+    assert len(r["bilesen_degisimleri"]) == 4
 
 
 def test_ranking_is_sorted(toolbox):
@@ -101,80 +94,106 @@ def test_search_manual_rejects_empty_query(toolbox):
         toolbox.search_manual("   ")
 
 
-# --- Ajan döngüsü: gerçek LLM yerine senaryolu sahte bir LLM ile -------------
+# --- İş emri taslağı ----------------------------------------------------------
 
-class ScriptedLLM:
-    """Önceden yazılmış cevapları sırayla döndürür ve gelen mesajları kaydeder."""
-
-    def __init__(self, replies):
-        self.replies, self.seen = list(replies), []
-
-    def chat(self, messages, tools):
-        self.seen.append(list(messages))
-        return self.replies.pop(0)
+def draft(toolbox, **overrides):
+    args = {"machine_id": 1, "component": "comp2", "reason": "Risk %90, dönüş hızı %17 düşük",
+            "steps": ["Kilitle", "Rulmanı değiştir"], "parts": ["RL-02"], "estimated_hours": 4}
+    return toolbox.draft_work_order(**{**args, **overrides})
 
 
-def call(name, **args):
-    return {"content": "", "tool_calls": [{"id": f"c_{name}", "name": name, "arguments": json.dumps(args)}]}
+def test_draft_work_order_sets_priority_from_risk(toolbox):
+    order = draft(toolbox)["is_emri"]
+    risk = toolbox.predict_failure_risk(1)["ariza_riski_24_saat_yuzde"]
+    expected = "acil" if risk >= 80 else "yuksek" if risk >= 50 else "normal"
+    assert order["status"] == "taslak" and order["priority"] == expected
+    assert order["steps"] == ["Kilitle", "Rulmanı değiştir"]
 
+
+def test_second_draft_for_same_machine_returns_existing(toolbox):
+    first = draft(toolbox)["is_emri"]
+    second = draft(toolbox, reason="Başka gerekçe")
+    assert second["is_emri"]["id"] == first["id"] and len(toolbox.orders.list()) == 1
+
+
+@pytest.mark.parametrize("bad", [{"component": "comp9"}, {"steps": []}, {"reason": " "}, {"machine_id": 999}])
+def test_draft_rejects_bad_input(toolbox, bad):
+    with pytest.raises(ValueError):
+        draft(toolbox, **bad)
+
+
+# --- Ajan döngüsü: gerçek LLM yerine senaryolu sahte LLM ile --------------------
 
 def test_agent_calls_tool_then_answers(toolbox):
-    llm = ScriptedLLM([call("get_machine_info", machine_id=1), {"content": "Bitti.", "tool_calls": []}])
+    llm = ScriptedLLM([call("rank_machines_by_risk", top_n=3), answer("Bitti.")])
     events = []
-    res = run_agent("Makine 1?", toolbox, llm, on_event=events.append)
+    res = run_agent("En riskli 3?", toolbox, llm, on_event=events.append)
     assert res.answer == "Bitti." and len(res.steps) == 1
     assert [e["type"] for e in events] == ["tool_call", "tool_result", "answer"]
     tool_msg = llm.seen[1][-1]
-    assert tool_msg["role"] == "tool" and '"machine_id": 1' in tool_msg["content"]
+    assert tool_msg["role"] == "tool" and '"makineler":' in tool_msg["content"]  # boşluksuz JSON
 
 
 def test_agent_survives_bad_tool_and_bad_args(toolbox):
     bad_name = {"content": "", "tool_calls": [{"id": "x", "name": "delete_everything", "arguments": "{}"}]}
-    bad_args = {"content": "", "tool_calls": [{"id": "y", "name": "get_machine_info", "arguments": "{bozuk"}]}
-    missing = call("get_machine_info", machine_id=999)
-    llm = ScriptedLLM([bad_name, bad_args, missing, {"content": "Tamam.", "tool_calls": []}])
+    bad_args = {"content": "", "tool_calls": [{"id": "y", "name": "get_machine_report", "arguments": "{bozuk"}]}
+    private = {"content": "", "tool_calls": [{"id": "z", "name": "_q", "arguments": '{"sql": "DROP TABLE machines"}'}]}
+    missing = call("get_machine_report", machine_id=999)
+    llm = ScriptedLLM([bad_name, bad_args, private, missing, answer("Tamam.")])
     res = run_agent("?", toolbox, llm)
     assert res.answer == "Tamam."
     assert all("hata" in s["result"] for s in res.steps)
 
 
-def test_agent_requires_evidence_before_explaining_risk(toolbox):
-    """Model riske bakıp hemen cevap verirse döngü geri çevirir ve eksik araçları söyler."""
+def test_agent_requires_manual_and_draft_for_risky_machine(toolbox):
+    """Rapora bakıp hemen cevap verirse döngü geri çevirir ve eksik adımları söyler."""
     llm = ScriptedLLM([
-        call("predict_failure_risk", machine_id=1),
-        {"content": "Erken cevap.", "tool_calls": []},
-        call("get_telemetry_summary", machine_id=1),
-        call("get_recent_errors", machine_id=1),
-        call("get_maintenance_history", machine_id=1),
+        call("get_machine_report", machine_id=1),
+        answer("Erken cevap."),
         call("search_manual", query="rulman kontrol adımları"),
-        {"content": "Tam cevap.", "tool_calls": []},
+        call("draft_work_order", machine_id=1, component="comp2", reason="r", steps=["Kilitle"]),
+        answer("Tam cevap."),
     ])
     events = []
-    res = run_agent("Makine 1 neden riskli?", toolbox, llm, on_event=events.append)
-    assert res.answer == "Tam cevap." and len(res.steps) == 5
+    res = run_agent("Makine 1 neden riskli?", toolbox, llm, on_event=events.append, draft_threshold=0)
+    assert res.answer == "Tam cevap." and len(res.steps) == 3
     nudges = [e for e in events if e["type"] == "nudge"]
-    assert len(nudges) == 1 and nudges[0]["missing"] == {1: [*EVIDENCE_TOOLS, "search_manual"]}
-    nudge_msg = llm.seen[2][-1]
-    assert nudge_msg["role"] == "user" and "get_telemetry_summary" in nudge_msg["content"]
+    assert len(nudges) == 1 and nudges[0]["missing"] == {1: ["search_manual", "draft_work_order"]}
+    assert llm.seen[2][-1]["role"] == "user" and "draft_work_order" in llm.seen[2][-1]["content"]
+    assert len(toolbox.orders.list("taslak")) == 1
+
+
+def test_low_risk_machine_needs_no_draft(toolbox):
+    llm = ScriptedLLM([call("get_machine_report", machine_id=1), call("search_manual", query="rulman"),
+                       answer("Risk düşük.")])
+    events = []
+    run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=101)
+    assert all(e["type"] != "nudge" for e in events)
 
 
 def test_agent_nudges_only_once(toolbox):
-    llm = ScriptedLLM([call("predict_failure_risk", machine_id=1),
-                       {"content": "a", "tool_calls": []},
-                       {"content": "b", "tool_calls": []}])
+    llm = ScriptedLLM([call("get_machine_report", machine_id=1), answer("a"), answer("b")])
     events = []
     res = run_agent("?", toolbox, llm, on_event=events.append)
     assert res.answer == "b" and [e["type"] for e in events].count("nudge") == 1
 
 
-def test_ranking_question_needs_no_extra_evidence(toolbox):
-    llm = ScriptedLLM([call("rank_machines_by_risk", top_n=3), {"content": "Liste.", "tool_calls": []}])
+def test_agent_waits_when_rate_limited(toolbox):
+    slept = []
+    llm = ScriptedLLM([RateLimited(7), answer("Sonunda.")])
     events = []
-    res = run_agent("En riskli 3 makine?", toolbox, llm, on_event=events.append)
-    assert res.answer == "Liste." and all(e["type"] != "nudge" for e in events)
+    res = run_agent("?", toolbox, llm, on_event=events.append, sleep=slept.append)
+    assert res.answer == "Sonunda." and slept == [7]
+    assert events[0] == {"type": "waiting", "seconds": 7}
+
+
+def test_agent_gives_up_on_long_rate_limit(toolbox):
+    llm = ScriptedLLM([RateLimited(3600)])  # ör. günlük sınır doldu
+    with pytest.raises(RateLimited):
+        run_agent("?", toolbox, llm, sleep=lambda s: None)
 
 
 def test_agent_stops_at_step_limit(toolbox):
-    llm = ScriptedLLM([call("get_machine_info", machine_id=1)] * 3)
+    llm = ScriptedLLM([call("rank_machines_by_risk")] * 3)
     res = run_agent("?", toolbox, llm, max_steps=3)
     assert res.stopped_early and len(res.steps) == 3

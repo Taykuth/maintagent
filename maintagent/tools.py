@@ -16,6 +16,7 @@ import pandas as pd
 from maintagent.features import COMPS, SENSORS, features_at
 from maintagent.manual import ManualSearch
 from maintagent.model import load, predict, top_factors
+from maintagent.work_orders import WorkOrderStore
 
 SENSOR_TR = {"volt": "voltaj", "rotate": "dönüş hızı", "pressure": "basınç", "vibration": "titreşim"}
 
@@ -46,12 +47,13 @@ def describe_feature(name: str) -> str:
 
 class Toolbox:
     def __init__(self, con: duckdb.DuckDBPyConnection, model_dir: Path, as_of: datetime,
-                 manual: ManualSearch | None = None):
+                 manual: ManualSearch | None = None, orders: WorkOrderStore | None = None, model=None):
         self.con = con
         self.as_of = as_of
         self.model_dir = model_dir
         self.manual = manual
-        self._model = None
+        self.orders = orders
+        self._model = model  # API, modeli bir kez yükleyip her isteğe paylaştırır
 
     # --- yardımcılar ---------------------------------------------------------
 
@@ -63,7 +65,7 @@ class Toolbox:
         return self._model
 
     def _check_machine(self, machine_id: int) -> None:
-        n = self.con.execute("SELECT count(*) FROM machines WHERE machine_id = $m", {"m": machine_id}).fetchone()[0]
+        n = self.con.execute("SELECT count(*) FROM machines WHERE machine_id = $m", {"m": int(machine_id)}).fetchone()[0]
         if not n:
             raise ValueError(f"Makine {machine_id} bulunamadı. Geçerli numaralar 1-100 arası.")
 
@@ -144,6 +146,7 @@ class Toolbox:
 
     def predict_failure_risk(self, machine_id: int) -> dict:
         self._check_machine(machine_id)
+        machine_id = int(machine_id)
         model = self._model_or_error()
         row = features_at(self.con, self.as_of)
         row = row[row.machine_id == machine_id]
@@ -180,50 +183,119 @@ class Toolbox:
             return {"sorgu": query, "sonuclar": [], "not": "Kılavuzda eşleşen bölüm bulunamadı; farklı kelimelerle dene."}
         return {"sorgu": query, "sonuclar": [{"bolum": c.title, "metin": c.text} for c in found]}
 
+    def get_machine_report(self, machine_id: int) -> dict:
+        """Ajanın bir makine için ihtiyaç duyduğu kanıt tek çağrıda: risk, sensörler, hatalar, bakım.
+
+        Önce bunlar beş ayrı araçtı. Her araç çağrısı LLM'e bir tur daha demek ve her turda
+        bütün konuşma yeniden gönderiliyor; Groq'un dakikalık token sınırına takılıyorduk.
+        Sık birlikte çağrılan araçları birleştirmek tur sayısını ve tokenı azaltır.
+        """
+        info = self.get_machine_info(machine_id)
+        risk = self.predict_failure_risk(machine_id)
+        tele = self.get_telemetry_summary(machine_id, hours=24)
+        errors = self.get_recent_errors(machine_id, days=7)
+        maint = self.get_maintenance_history(machine_id)
+        return {
+            "makine": {"id": info["machine_id"], "model": info["model"], "yas": info["age_years"]},
+            "risk": {k: risk[k] for k in ("ariza_riski_24_saat_yuzde", "en_olasi_bilesen", "bilesen_adi",
+                                          "riski_en_cok_artiran_3_etken")},
+            "sensorler_son_24_saat": {
+                SENSOR_TR[s]: {"ortalama": v["son_24_saat_ortalama"], "normal_30_gun": v["normal_ortalama_30_gun"],
+                               "degisim_yuzde": v["normale_gore_degisim_yuzde"]}
+                for s, v in tele["sensorler"].items()},
+            "normalden_belirgin_sapan": tele["normalden_belirgin_sapan"],
+            "hatalar_son_7_gun": [{"kod": e["hata"], "anlami": e["anlami"], "adet": e["adet"]} for e in errors["hatalar"]],
+            "bilesen_degisimleri": [{"bilesen": c["bilesen"], "ad": c["ad"], "kac_gundur": c["kac_gundur_degismedi"],
+                                     "son_neden": c["son_degisim_nedeni"]} for c in maint["bilesenler"]],
+        }
+
+    def draft_work_order(self, machine_id: int, component: str, reason: str, steps: list[str],
+                         parts: list[str] | None = None, estimated_hours: float | None = None,
+                         manual_section: str | None = None) -> dict:
+        """Bakım şefinin onayına sunulacak iş emri taslağı oluşturur. Onaylamaz.
+
+        Öncelik LLM'den alınmaz; modelin riskinden kılavuz kuralıyla hesaplanır.
+        """
+        if self.orders is None:
+            raise RuntimeError("İş emri kaydı yapılandırılmadı.")
+        self._check_machine(machine_id)
+        machine_id = int(machine_id)
+        if component not in COMP_TR:
+            raise ValueError(f"Bilinmeyen bileşen: {component}. Seçenekler: {sorted(COMP_TR)}")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("Gerekçe boş olamaz; risk, sensör ve hata kodlarını sayılarla yaz.")
+        if not isinstance(steps, list) or not steps or not all(isinstance(s, str) and s.strip() for s in steps):
+            raise ValueError("En az bir adım yaz (metin listesi).")
+        existing = self.orders.open_draft(machine_id, component)
+        if existing:
+            return {"is_emri": existing, "not": "Bu makine ve bileşen için onay bekleyen bir taslak zaten var; yenisi açılmadı."}
+        risk = self.predict_failure_risk(machine_id)["ariza_riski_24_saat_yuzde"]
+        order = self.orders.create(
+            machine_id=machine_id, component=component, risk_pct=risk, reason=reason.strip(),
+            steps=[s.strip() for s in steps], parts=[str(p) for p in (parts or [])],
+            estimated_hours=float(estimated_hours) if estimated_hours is not None else None,
+            manual_section=manual_section)
+        return {"is_emri": order, "not": "Taslak oluşturuldu ve bakım şefinin onayını bekliyor."}
+
+    # --- arayüz için (ajan aracı değil) --------------------------------------
+
     def all_risks(self) -> pd.DataFrame:
-        """Arayüz için: tüm makinelerin riski (ajan aracı değil)."""
-        return predict(self._model_or_error(), features_at(self.con, self.as_of)).sort_values("risk", ascending=False)
+        """Tüm makinelerin riski, modeli ve yaşı; riske göre sıralı."""
+        preds = predict(self._model_or_error(), features_at(self.con, self.as_of))
+        machines = self._q("SELECT machine_id, model, age FROM machines")
+        return preds.merge(machines, on="machine_id").sort_values("risk", ascending=False)
+
+    def telemetry_series(self, machine_id: int, hours: int = 168) -> dict:
+        """Grafik için saatlik sensör değerleri ve aynı penceredeki hata/bakım olayları."""
+        self._check_machine(machine_id)
+        hours = max(1, min(int(hours), 24 * 30))
+        start = self.as_of - timedelta(hours=hours)
+        points = self._q("""SELECT ts, volt, rotate, pressure, vibration FROM telemetry
+                            WHERE machine_id = $m AND ts > $s AND ts <= $as_of ORDER BY ts""", m=machine_id, s=start)
+        events = self._q("""
+            SELECT ts, 'hata' AS tur, error_id AS kod FROM errors WHERE machine_id = $m AND ts > $s AND ts <= $as_of
+            UNION ALL
+            SELECT ts, 'bakim', comp FROM maint WHERE machine_id = $m AND ts > $s AND ts <= $as_of
+            ORDER BY ts""", m=machine_id, s=start)
+        points["ts"] = points.ts.astype(str)
+        events["ts"] = events.ts.astype(str)
+        return {"machine_id": int(machine_id), "points": points.round(2).to_dict("records"),
+                "events": events.to_dict("records")}
 
 
-# LLM'e gösterilen araç tanımları. Açıklamalar modelin hangi aracı ne zaman
-# seçeceğini belirler; kısa ve net tutuldu.
+def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": {
+        "type": "object", "properties": properties, "required": required}}}
+
+
+MACHINE = {"machine_id": {"type": "integer"}}
+
+# LLM'e gösterilen araçlar. Her tanım her turda yeniden gönderildiği için kısa tutuldu.
+# get_machine_info, predict_failure_risk ve get_maintenance_history metot olarak duruyor
+# (rapor ve API kullanıyor) ama ajana ayrı araç olarak verilmiyor.
 TOOL_SCHEMAS = [
-    {"type": "function", "function": {
-        "name": "get_machine_info",
-        "description": "Bir makinenin modelini ve yaşını döndürür.",
-        "parameters": {"type": "object", "properties": {"machine_id": {"type": "integer"}}, "required": ["machine_id"]}}},
-    {"type": "function", "function": {
-        "name": "get_telemetry_summary",
-        "description": "Son N saatin sensör ortalamalarını (voltaj, dönüş hızı, basınç, titreşim) makinenin normal değerleriyle karşılaştırır.",
-        "parameters": {"type": "object", "properties": {
-            "machine_id": {"type": "integer"},
-            "hours": {"type": "integer", "description": "Bakılacak pencere, saat (varsayılan 48, en fazla 168)"}},
-            "required": ["machine_id"]}}},
-    {"type": "function", "function": {
-        "name": "get_recent_errors",
-        "description": "Son N günde makinenin kaydettiği hata kodlarını ve sayılarını döndürür.",
-        "parameters": {"type": "object", "properties": {
-            "machine_id": {"type": "integer"},
-            "days": {"type": "integer", "description": "Kaç gün geriye bakılacak (varsayılan 7)"}},
-            "required": ["machine_id"]}}},
-    {"type": "function", "function": {
-        "name": "get_maintenance_history",
-        "description": "Her bileşenin (comp1-comp4) en son ne zaman ve neden değiştirildiğini döndürür.",
-        "parameters": {"type": "object", "properties": {"machine_id": {"type": "integer"}}, "required": ["machine_id"]}}},
-    {"type": "function", "function": {
-        "name": "predict_failure_risk",
-        "description": "Makine öğrenmesi modeliyle önümüzdeki 24 saatteki arıza riskini, en olası bileşeni ve riski artıran etkenleri döndürür.",
-        "parameters": {"type": "object", "properties": {"machine_id": {"type": "integer"}}, "required": ["machine_id"]}}},
-    {"type": "function", "function": {
-        "name": "rank_machines_by_risk",
-        "description": "Tüm makineleri arıza riskine göre sıralar ve en riskli N tanesini döndürür.",
-        "parameters": {"type": "object", "properties": {"top_n": {"type": "integer", "description": "Kaç makine (varsayılan 5)"}}}}},
-    {"type": "function", "function": {
-        "name": "search_manual",
-        "description": "Bakım kılavuzunda arama yapar: bileşen arıza belirtileri, kontrol adımları, değişim prosedürü, "
-                       "süre ve parça bilgisi, hata kodlarının anlamı, güvenlik ve iş emri kuralları.",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "Türkçe arama metni, ör. 'ana mil rulmanı kontrol adımları'"},
-            "k": {"type": "integer", "description": "Kaç bölüm döndürülsün (varsayılan 3, en fazla 5)"}},
-            "required": ["query"]}}},
+    _fn("get_machine_report",
+        "Bir makinenin tam durumu: 24 saatlik arıza riski ve etkenleri, sensörlerin normale göre değişimi, "
+        "son 7 günün hata kodları, bileşenlerin kaç gündür değişmediği.", MACHINE, ["machine_id"]),
+    _fn("get_telemetry_summary", "Sensör ortalamalarını özel bir pencerede (saat) normalle karşılaştırır.",
+        {**MACHINE, "hours": {"type": "integer", "description": "1-168"}}, ["machine_id"]),
+    _fn("get_recent_errors", "Son N günün hata kodları ve sayıları.",
+        {**MACHINE, "days": {"type": "integer", "description": "1-90"}}, ["machine_id"]),
+    _fn("rank_machines_by_risk", "Makineleri arıza riskine göre sıralar.",
+        {"top_n": {"type": "integer", "description": "1-20, varsayılan 5"}}, []),
+    _fn("search_manual",
+        "Bakım kılavuzunda arar: arıza belirtileri, kontrol adımları, değişim prosedürü, süre ve parça, "
+        "hata kodları, güvenlik, iş emri kuralları.",
+        {"query": {"type": "string", "description": "ör. 'ana mil rulmanı kontrol adımları'"},
+         "k": {"type": "integer", "description": "1-5, varsayılan 3"}}, ["query"]),
+    _fn("draft_work_order",
+        "Bakım şefinin onayına iş emri taslağı oluşturur. Öncelik riske göre otomatik belirlenir. Onaylamaz.",
+        {**MACHINE,
+         "component": {"type": "string", "enum": COMPS},
+         "reason": {"type": "string", "description": "Sayılarla gerekçe: risk, sensör sapması, hata kodları"},
+         "steps": {"type": "array", "items": {"type": "string"}, "description": "Kılavuzdaki adımlar"},
+         "parts": {"type": "array", "items": {"type": "string"}},
+         "estimated_hours": {"type": "number"},
+         "manual_section": {"type": "string", "description": "Adımların alındığı kılavuz bölümü"}},
+        ["machine_id", "component", "reason", "steps"]),
 ]

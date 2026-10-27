@@ -9,11 +9,16 @@ Güvenlik önlemleri:
   - En fazla MAX_STEPS LLM turu; sonsuz döngüye girmez.
   - Bilinmeyen araç, bozuk argüman ya da araç hatası programı çökertmez;
     hata mesajı LLM'e geri verilir ve LLM düzeltme şansı bulur.
-  - Kanıt kontrolü: LLM bir makinenin riskine bakıp sensör, hata ve bakım
-    verisine bakmadan cevap vermeye kalkarsa, döngü cevabı bir kez geri çevirir
-    ve eksik araçları söyler. Prompt'a güvenmek yetmedi; ilk denemede model
-    tek araçla cevap verdi.
+  - Adım kontrolü: LLM bir makinenin raporuna bakıp kılavuza bakmadan ya da
+    yüksek riskte iş emri taslağı hazırlamadan cevap vermeye kalkarsa, döngü
+    cevabı bir kez geri çevirir ve eksik adımları söyler. Prompt'a güvenmek
+    yetmedi; ilk denemede model tek araçla cevap verdi.
+  - Groq kullanım sınırına (429) takılınca bekler ve bunu arayüze bildirir.
   - Her adım `on_event` ile dışarı bildirilir; arayüz bunları canlı gösterir.
+
+Token bütçesi: Groq ücretsiz katmanında gpt-oss-120b için dakikada 8.000 token
+sınırı var. Bu yüzden kanıt tek araçta toplanır (get_machine_report), prompt kısa
+tutulur ve araç çıktıları boşluksuz JSON olarak gönderilir.
 """
 
 import json
@@ -24,51 +29,82 @@ from typing import Callable, Protocol
 from maintagent.tools import TOOL_SCHEMAS, Toolbox
 
 MAX_STEPS = 10
+DRAFT_RISK_THRESHOLD = 50.0  # kılavuz: risk %50 ve üstü "yüksek" öncelik
+MAX_WAIT_SECONDS = 60        # daha uzun bekleme gerekiyorsa (ör. günlük sınır) vazgeç
+RATE_LIMIT_RETRIES = 3
 
-# Bir makinenin riskini açıklamadan önce toplanması gereken kanıt.
-EVIDENCE_TOOLS = ("get_telemetry_summary", "get_recent_errors", "get_maintenance_history")
-
-SYSTEM_PROMPT = """Sen bir fabrikada bakım mühendislerine yardım eden bir yapay zeka asistanısın.
-Şu anki tarih ve saat: {as_of}. Bu andan sonrasını bilemezsin.
-
+SYSTEM_PROMPT = """Fabrika bakım mühendislerine yardım eden asistansın. Şu an: {as_of}; sonrasını bilemezsin.
 Kurallar:
-- Bilgiyi her zaman araçlardan al. Araç çıktısında olmayan hiçbir sayıyı yazma.
-- Bir makinenin riskini açıklarken şu araçların hepsini çağır: predict_failure_risk,
-  get_telemetry_summary, get_recent_errors, get_maintenance_history ve search_manual. Tek araçla cevap verme.
-- search_manual ile en olası bileşenin kontrol adımlarına, değişim süresine ve parçalarına bak.
-  Öneriyi kılavuza dayandır ve hangi bölümden aldığını yaz (ör. "Kılavuz: comp2 — Ana mil rulmanı › Kontrol adımları").
-- Bileşeni hem kodu hem adıyla yaz (ör. "comp2 (ana mil rulmanı)").
-- Sensör değerini çıplak yazma; makinenin normaliyle karşılaştır (ör. "dönüş hızı normalin %16 altında").
-- Öneri yalnızca kanıta dayansın. Sensördeki sapma çoğunlukla bileşendeki sorunun belirtisidir;
-  sensörün bozuk olduğuna dair kanıt yoksa kalibrasyon ya da sensör değişimi önerme.
-- Emin olmadığın şeyi söyle; tahmin yürütüyorsan bunu belirt.
-- Türkçe ve kısa yaz.
+- Her sayıyı araç çıktısından al, uydurma.
+- Bir makine sorulursa önce get_machine_report, sonra en olası bileşen için search_manual (kontrol adımları, süre, parça).
+- Risk %{threshold:.0f} veya üstündeyse draft_work_order ile iş emri taslağı oluştur; adım ve parçaları kılavuzdan al.
+  Taslak bakım şefinin onayını bekler: "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
+- Bileşeni kod ve adıyla yaz: "comp2 (ana mil rulmanı)". Sensörü normaliyle karşılaştır: "dönüş hızı normalin %16 altında".
+- Sensör sapması genelde bileşen sorunudur; sensör arızası kanıtı yoksa kalibrasyon önerme.
+- Emin değilsen söyle. Türkçe ve kısa yaz.
+Biçim:
+**Durum:** tek cümle.
+**Kanıt:** 3-5 madde, sayılarla.
+**Öneri:** kılavuzdaki adımlar, süre ve parça, kaynak bölüm; taslak hazırlandıysa numarası."""
 
-Cevap biçimi:
-**Durum:** tek cümle özet.
-**Kanıt:** araçlardan gelen 3-5 madde, her birinde sayı.
-**Öneri:** kılavuza dayanan somut adımlar, tahmini süre ve parça; sonunda kaynak bölüm."""
+
+class LLMError(Exception):
+    """Kullanıcıya gösterilebilecek LLM hatası (anahtar yok, bağlantı yok, sınır doldu)."""
+
+
+class RateLimited(LLMError):
+    def __init__(self, wait_seconds: float):
+        super().__init__(f"Groq kullanım sınırına ulaşıldı; {wait_seconds:.0f} sn sonra tekrar denenebilir.")
+        self.wait_seconds = wait_seconds
 
 
 class LLM(Protocol):
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
-        """{"content": str, "tool_calls": [{"id", "name", "arguments"}]} döndürür."""
+        """{"content": str, "tool_calls": [{"id", "name", "arguments"}], "tokens": int} döndürür."""
 
 
 class GroqLLM:
-    """OpenAI uyumlu herhangi bir API ile çalışır (Groq, OpenAI)."""
+    """OpenAI uyumlu herhangi bir API ile çalışır (Groq, OpenAI ve benzerleri)."""
 
-    def __init__(self, api_key: str, model: str, base_url: str):
-        from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, api_key: str, model: str, base_url: str, reasoning_effort: str | None = "low"):
+        import openai
+
+        if not api_key:
+            raise LLMError("GROQ_API_KEY tanımlı değil; .env dosyasını kontrol et.")
+        self._openai = openai
+        # 429'u kütüphaneye bırakmıyoruz; kendimiz bekleyip arayüze "bekleniyor" diyebilmek için.
+        self.client = openai.OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
         self.model = model
+        # Düşük akıl yürütme: daha az çıktı tokenı, dakikalık sınıra daha geç takılma.
+        self.extra = {"reasoning_effort": reasoning_effort} if reasoning_effort and "gpt-oss" in model else None
 
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
-        r = self.client.chat.completions.create(model=self.model, messages=messages, tools=tools, temperature=0)
+        oa = self._openai
+        for attempt in range(2):
+            try:
+                r = self.client.chat.completions.create(model=self.model, messages=messages, tools=tools,
+                                                        temperature=0, extra_body=self.extra)
+                break
+            except oa.RateLimitError as e:
+                raise RateLimited(_retry_after(e)) from e
+            except oa.AuthenticationError as e:
+                raise LLMError("Groq API anahtarı geçersiz.") from e
+            except (oa.APIConnectionError, oa.InternalServerError) as e:
+                if attempt == 1:
+                    raise LLMError("Groq'a ulaşılamadı; biraz sonra tekrar dene.") from e
+                time.sleep(1)
         m = r.choices[0].message
         return {"content": m.content or "",
                 "tool_calls": [{"id": c.id, "name": c.function.name, "arguments": c.function.arguments}
-                               for c in (m.tool_calls or [])]}
+                               for c in (m.tool_calls or [])],
+                "tokens": r.usage.total_tokens if r.usage else 0}
+
+
+def _retry_after(error) -> float:
+    try:
+        return float(error.response.headers.get("retry-after", 10))
+    except (AttributeError, TypeError, ValueError):
+        return 10.0
 
 
 @dataclass
@@ -77,21 +113,32 @@ class AgentResult:
     steps: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     stopped_early: bool = False
+    tokens: int = 0
 
 
 def run_agent(question: str, toolbox: Toolbox, llm: LLM,
-              on_event: Callable[[dict], None] | None = None, max_steps: int = MAX_STEPS) -> AgentResult:
+              on_event: Callable[[dict], None] | None = None, max_steps: int = MAX_STEPS,
+              draft_threshold: float = DRAFT_RISK_THRESHOLD,
+              sleep: Callable[[float], None] = time.sleep) -> AgentResult:
     emit = on_event or (lambda e: None)
     t0 = time.perf_counter()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(as_of=toolbox.as_of)},
+    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(as_of=toolbox.as_of, threshold=draft_threshold)},
                 {"role": "user", "content": question}]
     steps: list[dict] = []
+    tokens = 0
     nudged = False
 
+    def finish(answer: str, stopped_early: bool = False) -> AgentResult:
+        seconds = time.perf_counter() - t0
+        emit({"type": "answer", "content": answer, "tokens": tokens, "seconds": round(seconds, 1),
+              "stopped_early": stopped_early})
+        return AgentResult(answer, steps, seconds, stopped_early, tokens)
+
     for _ in range(max_steps):
-        reply = llm.chat(messages, TOOL_SCHEMAS)
+        reply = _chat_with_retry(llm, messages, emit, sleep)
+        tokens += reply.get("tokens", 0)
         if not reply["tool_calls"]:
-            missing = _missing_evidence(steps)
+            missing = _missing_steps(steps, draft_threshold)
             if missing and not nudged:
                 # Cevabı bir kez geri çevir. Tek seferlik: LLM yine araç çağırmazsa
                 # sonsuz döngüye girmemek için ikinci cevabı kabul ederiz.
@@ -100,11 +147,10 @@ def run_agent(question: str, toolbox: Toolbox, llm: LLM,
                 todo = "; ".join(f"Makine {m}: {', '.join(tools)}" for m, tools in missing.items())
                 messages.append({"role": "assistant", "content": reply["content"]})
                 messages.append({"role": "user", "content":
-                                 f"[Otomatik kontrol] Cevap vermeden önce eksik kanıtı topla: {todo}. "
+                                 f"[Otomatik kontrol] Cevap vermeden önce eksik adımları tamamla: {todo}. "
                                  "Sonra cevabı aynı biçimde yeniden yaz."})
                 continue
-            emit({"type": "answer", "content": reply["content"]})
-            return AgentResult(reply["content"], steps, time.perf_counter() - t0)
+            return finish(reply["content"])
 
         messages.append({"role": "assistant", "content": reply["content"], "tool_calls": [
             {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
@@ -118,12 +164,24 @@ def run_agent(question: str, toolbox: Toolbox, llm: LLM,
                     "ms": round((time.perf_counter() - started) * 1000)}
             steps.append(step)
             emit({"type": "tool_result", **step})
+            # Boşluksuz JSON: aynı bilgi, daha az token.
             messages.append({"role": "tool", "tool_call_id": call["id"],
-                             "content": json.dumps(result, ensure_ascii=False, default=str)})
+                             "content": json.dumps(result, ensure_ascii=False, default=str, separators=(",", ":"))})
 
-    note = f"{max_steps} adım sınırına ulaşıldı; ajan cevabı tamamlayamadı."
-    emit({"type": "answer", "content": note})
-    return AgentResult(note, steps, time.perf_counter() - t0, stopped_early=True)
+    return finish(f"{max_steps} adım sınırına ulaşıldı; ajan cevabı tamamlayamadı.", stopped_early=True)
+
+
+def _chat_with_retry(llm: LLM, messages: list[dict], emit, sleep) -> dict:
+    """Groq dakikalık sınıra takılırsa söylenen süre kadar bekleyip tekrar dener."""
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        try:
+            return llm.chat(messages, TOOL_SCHEMAS)
+        except RateLimited as e:
+            if attempt == RATE_LIMIT_RETRIES or e.wait_seconds > MAX_WAIT_SECONDS:
+                raise
+            emit({"type": "waiting", "seconds": round(e.wait_seconds, 1)})
+            sleep(e.wait_seconds)
+    raise AssertionError("buraya ulaşılmamalı")
 
 
 def _machine_id(step: dict) -> int | None:
@@ -133,19 +191,27 @@ def _machine_id(step: dict) -> int | None:
         return None
 
 
-def _missing_evidence(steps: list[dict]) -> dict[int, list[str]]:
-    """Riskine bakılan her makine için henüz çağrılmamış kanıt araçlarını döndürür.
+def _missing_steps(steps: list[dict], draft_threshold: float) -> dict[int, list[str]]:
+    """Raporuna bakılan her makine için eksik kalan adımları döndürür.
 
-    Hata dönen çağrılar kanıt sayılmaz. Riskine bakılmayan makineler (ör. sadece
-    "Makine 5 hangi model?" sorusu) kontrol edilmez. Kılavuz araması makineye
-    bağlı değildir; bir kez başarılı arama yapılmışsa yeterli sayılır.
+    - Kılavuz araması makineye bağlı değil; bir başarılı arama yeterli.
+    - Risk eşiğin üstündeyse o makine için iş emri taslağı da gerekli.
+    Hata dönen çağrılar sayılmaz. Raporuna bakılmayan makineler kontrol edilmez
+    (ör. "En riskli 3 makine hangileri?" sorusu).
     """
-    done = {(s["tool"], _machine_id(s)) for s in steps if "hata" not in s["result"]}
-    checked = sorted({m for tool, m in done if tool == "predict_failure_risk" and m is not None})
-    manual_done = any(tool == "search_manual" for tool, _ in done)
-    missing = {m: [t for t in EVIDENCE_TOOLS if (t, m) not in done] + ([] if manual_done else ["search_manual"])
-               for m in checked}
-    return {m: tools for m, tools in missing.items() if tools}
+    ok = [(s["tool"], _machine_id(s), s["result"]) for s in steps if "hata" not in s["result"]]
+    reported = {m: r["risk"]["ariza_riski_24_saat_yuzde"] for tool, m, r in ok
+                if tool == "get_machine_report" and m is not None}
+    manual_done = any(tool == "search_manual" for tool, _, _ in ok)
+    drafted = {m for tool, m, _ in ok if tool == "draft_work_order"}
+    missing = {}
+    for m, risk in sorted(reported.items()):
+        need = [] if manual_done else ["search_manual"]
+        if risk >= draft_threshold and m not in drafted:
+            need.append("draft_work_order")
+        if need:
+            missing[m] = need
+    return missing
 
 
 def _execute(toolbox: Toolbox, name: str, raw_args: str) -> dict:
@@ -156,6 +222,8 @@ def _execute(toolbox: Toolbox, name: str, raw_args: str) -> dict:
         args = json.loads(raw_args or "{}")
     except json.JSONDecodeError:
         return {"hata": f"Argümanlar geçerli JSON değil: {raw_args!r}"}
+    if not isinstance(args, dict):
+        return {"hata": "Argümanlar bir JSON nesnesi olmalı."}
     try:
         return getattr(toolbox, name)(**args)
     except (ValueError, TypeError, RuntimeError) as e:

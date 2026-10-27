@@ -25,3 +25,9 @@ AS_OF = datetime.fromisoformat(os.getenv("AS_OF", "2015-10-01 00:00:00"))
 # Varsayılan bm25: ek kurulum gerektirmez. Karar scripts/eval_retrieval.py ölçümüne göre verilir.
 MANUAL_PATH = ROOT_DIR / "data" / "manual" / "kilavuz.md"
 MANUAL_SEARCH = os.getenv("MANUAL_SEARCH", "bm25")
+
+# İş emri taslakları ve onaylar (SQLite; git'e girmez)
+WORK_ORDERS_DB = Path(os.getenv("WORK_ORDERS_DB", ROOT_DIR / "data" / "work_orders.sqlite"))
+
+# API'yi çağırabilecek arayüz adresleri, virgülle ayrılmış
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]

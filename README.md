@@ -26,3 +26,11 @@ pytest                           # runs the tests (no Kaggle data needed)
 ```
 
 No Kaggle data yet? `python scripts/train_model.py --synthetic` runs the whole pipeline on generated data with the same schema. Synthetic results are not meaningful; they only show the code works.
+
+## Run
+
+```bash
+python scripts/ask.py "Makine 20 neden riskli, ne yapmalıyım?"   # agent in the terminal
+python scripts/eval_retrieval.py                                 # compare manual search methods
+uvicorn maintagent.api:create_app --factory --reload             # API on http://localhost:8000 (docs: /docs)
+```
