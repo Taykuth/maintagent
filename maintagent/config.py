@@ -20,3 +20,8 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 # gerçek saati kullanamayız. Tüm araçlar bu tarihten SONRAKİ veriyi görmemeli,
 # yoksa model ve ajan geleceği görür (veri sızıntısı).
 AS_OF = datetime.fromisoformat(os.getenv("AS_OF", "2015-10-01 00:00:00"))
+
+# Bakım kılavuzu ve arama yöntemi (bm25, embedding, hybrid).
+# Varsayılan bm25: ek kurulum gerektirmez. Karar scripts/eval_retrieval.py ölçümüne göre verilir.
+MANUAL_PATH = ROOT_DIR / "data" / "manual" / "kilavuz.md"
+MANUAL_SEARCH = os.getenv("MANUAL_SEARCH", "bm25")
