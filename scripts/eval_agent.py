@@ -1,0 +1,113 @@
+"""Ajanı geçmişteki gerçek anlarda sınar ve sonuçları özetler.
+
+Groq ücretsiz katmanında günlük token sınırı var (gpt-oss-120b için 200.000). Bir senaryo
+yaklaşık 10.000 token harcadığı için 24 senaryo tek günde bitmeyebilir. Bu yüzden script:
+  - her senaryonun sonucunu bitince data/eval/agent_runs.jsonl dosyasına yazar,
+  - tekrar çalıştırılınca bitmiş senaryoları atlar, kaldığı yerden devam eder,
+  - günlük sınıra takılınca durur ve kaç senaryo kaldığını söyler.
+
+Kullanım:
+    python scripts/eval_agent.py             # kalan bütün senaryolar
+    python scripts/eval_agent.py --limit 5   # en fazla 5 senaryo
+    python scripts/eval_agent.py --summary   # sadece özet (LLM çağırmaz)
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import duckdb  # noqa: E402
+
+from maintagent import config  # noqa: E402
+from maintagent.agent import GroqLLM, LLMError, RateLimited  # noqa: E402
+from maintagent.evaluation import (append_record, load_records, make_scenarios, run_scenario,  # noqa: E402
+                                   summarize, to_frame)
+from maintagent.manual import ManualSearch, load_chunks  # noqa: E402
+from maintagent.model import load  # noqa: E402
+
+EVAL_DIR = config.ROOT_DIR / "data" / "eval"
+SCENARIOS = EVAL_DIR / "agent_scenarios.json"
+RESULTS = EVAL_DIR / "agent_runs.jsonl"
+SUMMARY = EVAL_DIR / "agent_summary.md"
+
+
+def line(r: dict) -> str:
+    if r["tur"] == "ariza":
+        verdict = "bileşen doğru" if r["bilesen_dogru"] else f"bileşen YANLIŞ ({r['ajan_bilesen']})"
+        verdict += ", taslak açıldı" if r["taslak"] else ", taslak YOK"
+    else:
+        verdict = "YANLIŞ ALARM" if r["yanlis_alarm"] else "alarm yok"
+    if r["dayanaksiz_sayilar"]:
+        verdict += f", dayanaksız sayı: {r['dayanaksiz_sayilar']}"
+    return f"{verdict} | {r['arac_sayisi']} araç, {r['token']:,} token, {r['sure_sn']} sn"
+
+
+def write_summary(records: list[dict]) -> str:
+    table = summarize(records)
+    model = config.GROQ_MODEL
+    SUMMARY.write_text(f"# Ajan değerlendirmesi\n\nLLM: `{model}`, kılavuz araması: `{config.MANUAL_SEARCH}`\n\n"
+                       f"{table}\n", encoding="utf-8")
+    return table
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=None, help="Bu çalıştırmada en fazla kaç senaryo")
+    ap.add_argument("--summary", action="store_true", help="Sadece kayıtlı sonuçların özetini yaz")
+    args = ap.parse_args()
+
+    con = duckdb.connect(str(config.DB_PATH), read_only=True)
+    if not SCENARIOS.exists():
+        EVAL_DIR.mkdir(parents=True, exist_ok=True)
+        scenarios = make_scenarios(con)
+        SCENARIOS.write_text(json.dumps(scenarios, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"{len(scenarios)} senaryo oluşturuldu: {SCENARIOS}")
+    scenarios = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+
+    records = load_records(RESULTS)
+    done = {r["id"] for r in records}
+    pending = [s for s in scenarios if s["id"] not in done]
+
+    if not args.summary and pending:
+        todo = pending[: args.limit] if args.limit else pending
+        print(f"{len(done)} senaryo daha önce bitmiş; şimdi {len(todo)} senaryo çalışacak.\n")
+        model = load(config.ROOT_DIR / "models")
+        manual = ManualSearch(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
+        llm = GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL)
+        for n, sc in enumerate(todo, 1):
+            print(f"[{n}/{len(todo)}] {sc['id']} makine {sc['machine_id']}, {sc['as_of']} ({sc['tur']}) ... ",
+                  end="", flush=True)
+            try:
+                r = run_scenario(sc, con, config.ROOT_DIR / "models", manual, llm, model=model)
+            except RateLimited as e:
+                print(f"\n\nGroq sınırı doldu ({e.wait_seconds:.0f} sn beklemek gerekiyor). "
+                      f"Kalan {len(pending) - n + 1} senaryo için scripti daha sonra tekrar çalıştır; "
+                      "kaldığı yerden devam eder.")
+                break
+            except LLMError as e:
+                print(f"\n\nHata: {e}")
+                break
+            append_record(RESULTS, r)
+            records.append(r)
+            print(line(r))
+
+    if not records:
+        print("Henüz sonuç yok.")
+        return 0
+    remaining = len(scenarios) - len(records)
+    print(f"\n{len(records)}/{len(scenarios)} senaryonun özeti" + (f" ({remaining} senaryo kaldı)" if remaining else ""))
+    print(write_summary(records))
+
+    misses = to_frame(records)
+    wrong = misses[(misses.tur == "ariza") & (misses.ajan_bilesen.isna() | ~misses.taslak)]
+    if len(wrong):
+        print("\nArıza senaryolarında eksik kalanlar:")
+        print(wrong.to_string(index=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

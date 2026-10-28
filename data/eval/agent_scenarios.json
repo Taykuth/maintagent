@@ -1,0 +1,219 @@
+[
+ {
+  "id": "a01",
+  "tur": "ariza",
+  "machine_id": 48,
+  "as_of": "2015-09-08 03:00:00",
+  "saat_once": 3,
+  "gercek_bilesenler": [
+   "comp1"
+  ]
+ },
+ {
+  "id": "a02",
+  "tur": "ariza",
+  "machine_id": 12,
+  "as_of": "2015-10-03 18:00:00",
+  "saat_once": 12,
+  "gercek_bilesenler": [
+   "comp2"
+  ]
+ },
+ {
+  "id": "a03",
+  "tur": "ariza",
+  "machine_id": 87,
+  "as_of": "2015-12-22 09:00:00",
+  "saat_once": 21,
+  "gercek_bilesenler": [
+   "comp3"
+  ]
+ },
+ {
+  "id": "a04",
+  "tur": "ariza",
+  "machine_id": 21,
+  "as_of": "2015-11-04 03:00:00",
+  "saat_once": 3,
+  "gercek_bilesenler": [
+   "comp4"
+  ]
+ },
+ {
+  "id": "a05",
+  "tur": "ariza",
+  "machine_id": 44,
+  "as_of": "2015-08-27 18:00:00",
+  "saat_once": 12,
+  "gercek_bilesenler": [
+   "comp1"
+  ]
+ },
+ {
+  "id": "a06",
+  "tur": "ariza",
+  "machine_id": 43,
+  "as_of": "2015-11-16 09:00:00",
+  "saat_once": 21,
+  "gercek_bilesenler": [
+   "comp2"
+  ]
+ },
+ {
+  "id": "a07",
+  "tur": "ariza",
+  "machine_id": 69,
+  "as_of": "2015-11-01 03:00:00",
+  "saat_once": 3,
+  "gercek_bilesenler": [
+   "comp3"
+  ]
+ },
+ {
+  "id": "a08",
+  "tur": "ariza",
+  "machine_id": 38,
+  "as_of": "2015-08-29 18:00:00",
+  "saat_once": 12,
+  "gercek_bilesenler": [
+   "comp4"
+  ]
+ },
+ {
+  "id": "a09",
+  "tur": "ariza",
+  "machine_id": 32,
+  "as_of": "2015-11-05 09:00:00",
+  "saat_once": 21,
+  "gercek_bilesenler": [
+   "comp1"
+  ]
+ },
+ {
+  "id": "a10",
+  "tur": "ariza",
+  "machine_id": 46,
+  "as_of": "2015-11-19 03:00:00",
+  "saat_once": 3,
+  "gercek_bilesenler": [
+   "comp2"
+  ]
+ },
+ {
+  "id": "a11",
+  "tur": "ariza",
+  "machine_id": 56,
+  "as_of": "2015-09-25 18:00:00",
+  "saat_once": 12,
+  "gercek_bilesenler": [
+   "comp2",
+   "comp3"
+  ]
+ },
+ {
+  "id": "a12",
+  "tur": "ariza",
+  "machine_id": 23,
+  "as_of": "2015-12-15 09:00:00",
+  "saat_once": 21,
+  "gercek_bilesenler": [
+   "comp4"
+  ]
+ },
+ {
+  "id": "h01",
+  "tur": "hatali_arizasiz",
+  "machine_id": 22,
+  "as_of": "2015-10-23 06:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "h02",
+  "tur": "hatali_arizasiz",
+  "machine_id": 55,
+  "as_of": "2015-12-21 06:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "h03",
+  "tur": "hatali_arizasiz",
+  "machine_id": 67,
+  "as_of": "2015-09-18 12:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "h04",
+  "tur": "hatali_arizasiz",
+  "machine_id": 85,
+  "as_of": "2015-08-31 09:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "h05",
+  "tur": "hatali_arizasiz",
+  "machine_id": 42,
+  "as_of": "2015-08-08 09:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "h06",
+  "tur": "hatali_arizasiz",
+  "machine_id": 98,
+  "as_of": "2015-10-21 09:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s01",
+  "tur": "sakin",
+  "machine_id": 50,
+  "as_of": "2015-11-19 15:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s02",
+  "tur": "sakin",
+  "machine_id": 6,
+  "as_of": "2015-10-09 06:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s03",
+  "tur": "sakin",
+  "machine_id": 52,
+  "as_of": "2015-10-20 15:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s04",
+  "tur": "sakin",
+  "machine_id": 62,
+  "as_of": "2015-11-03 15:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s05",
+  "tur": "sakin",
+  "machine_id": 65,
+  "as_of": "2015-09-08 15:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ },
+ {
+  "id": "s06",
+  "tur": "sakin",
+  "machine_id": 37,
+  "as_of": "2015-09-08 18:00:00",
+  "saat_once": null,
+  "gercek_bilesenler": []
+ }
+]
