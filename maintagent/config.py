@@ -24,9 +24,10 @@ GROQ_REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
 AS_OF = datetime.fromisoformat(os.getenv("AS_OF", "2015-10-01 00:00:00"))
 
 # Bakım kılavuzu ve arama yöntemi (bm25, embedding, hybrid).
-# Varsayılan bm25: ek kurulum gerektirmez. Karar scripts/eval_retrieval.py ölçümüne göre verilir.
+# Varsayılan hybrid: ölçümde en iyi sonuç (bkz. maintagent/manual.py). sentence-transformers
+# kurulu değilse uygulama BM25'e düşer.
 MANUAL_PATH = ROOT_DIR / "data" / "manual" / "kilavuz.md"
-MANUAL_SEARCH = os.getenv("MANUAL_SEARCH", "bm25")
+MANUAL_SEARCH = os.getenv("MANUAL_SEARCH", "hybrid")
 
 # İş emri taslakları ve onaylar (SQLite; git'e girmez)
 WORK_ORDERS_DB = Path(os.getenv("WORK_ORDERS_DB", ROOT_DIR / "data" / "work_orders.sqlite"))

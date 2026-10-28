@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from maintagent.agent import DRAFT_RISK_THRESHOLD, LLM, GroqLLM, LLMError, run_agent
-from maintagent.manual import ManualSearch, load_chunks
+from maintagent.manual import ManualSearch, build_search, load_chunks
 from maintagent.model import load
 from maintagent.tools import COMP_TR, Toolbox
 from maintagent.work_orders import STATUSES, WorkOrderStore
@@ -69,16 +69,17 @@ class AppState:
 
         if not config.DB_PATH.exists():
             raise RuntimeError(f"Veritabanı yok: {config.DB_PATH}. Önce python scripts/load_data.py çalıştır.")
+        manual, method = build_search(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
         return cls(
             con=duckdb.connect(str(config.DB_PATH), read_only=True),
             model_dir=config.ROOT_DIR / "models",
             as_of=config.AS_OF,
-            manual=ManualSearch(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH),
+            manual=manual,
             orders=WorkOrderStore(config.WORK_ORDERS_DB),
             make_llm=lambda: GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL,
                                        config.GROQ_REASONING_EFFORT),
             llm_name=config.GROQ_MODEL,
-            manual_method=config.MANUAL_SEARCH,
+            manual_method=method,
             cors_origins=config.CORS_ORIGINS,
         )
 

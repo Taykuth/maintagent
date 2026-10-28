@@ -10,7 +10,7 @@ sağlayabilir. Bazı sorular bilerek eş anlamlı kelimelerle yazıldı ("sarsı
 "hizasızlık"). Küçük bir set; sonuçlar yön gösterir, kesin değildir.
 
 Kullanım:
-    pip install sentence-transformers     # embedding için, bir kere
+    pip install -r requirements-embed.txt   # embedding için, bir kere
     python scripts/eval_retrieval.py
 """
 
@@ -59,7 +59,7 @@ def main() -> int:
         searches["Hibrit (BM25 + embedding)"] = ManualSearch(chunks, "hybrid", embed=embed)
     except ImportError:
         print("sentence-transformers kurulu değil; sadece BM25 ölçülüyor.")
-        print("Kurmak için: pip install sentence-transformers\n")
+        print("Kurmak için: pip install -r requirements-embed.txt\n")
 
     results = {name: evaluate(s, questions) for name, s in searches.items()}
 

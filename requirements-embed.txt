@@ -1,0 +1,3 @@
+# Kılavuzda embedding ve hibrit arama için (isteğe bağlı). Kurulu değilse uygulama BM25 kullanır.
+# Docker'da torch'un sadece CPU sürümü kurulur; bkz. Dockerfile.
+sentence-transformers>=3.0

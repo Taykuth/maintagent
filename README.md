@@ -70,14 +70,16 @@ Changes in v2: the manual search and the draft are required only above the 50% r
 
 ### Manual search
 
-The manual is 33 sections. BM25 over Turkish text, on 20 test questions:
+The manual has 33 sections; the agent sees the top 3 results. On 20 test questions:
 
-| Method | Correct section in top 3 |
-|---|---|
-| BM25, whole words | 0.65 |
-| BM25, words cut to their first 5 letters | 0.85 |
+| Method | Correct section first | Correct section in top 3 | MRR | ms per query |
+|---|---|---|---|---|
+| BM25, whole words | 0.45 | 0.65 | 0.59 | 0.1 |
+| BM25, words cut to their first 5 letters | 0.70 | 0.85 | 0.79 | 0.1 |
+| Dense, multilingual-e5-small | 0.75 | 0.90 | 0.84 | 12.4 |
+| Hybrid (BM25 + dense, reciprocal rank fusion) | 0.70 | 1.00 | 0.83 | 12.0 |
 
-Turkish adds suffixes to words ("rulmanı", "rulmanda", "rulmanlar"); cutting to 5 letters makes them match. Dense (multilingual-e5-small) and hybrid search are implemented and compared by `scripts/eval_retrieval.py`, but not measured yet, so the app uses BM25. Caveat: the same person wrote the manual and the questions, which favours word matching.
+Turkish adds suffixes to words ("rulmanı", "rulmanda", "rulmanlar"); cutting to 5 letters makes them match. I set the decision rule before running the dense models: switch to hybrid only if it beats BM25 by at least 0.10 in top-3 accuracy, because it brings PyTorch and a model download with it. Hybrid found 3 more of the 20 sections, so the app uses hybrid and falls back to BM25 when the embedding package is not installed. Caveats: 20 questions is a small set, and the same person wrote the manual and the questions.
 
 ## How it works
 
@@ -124,6 +126,7 @@ flowchart TD
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -r requirements-embed.txt   # optional: hybrid manual search (PyTorch); without it the app uses BM25
 cp .env.example .env               # then add your GROQ_API_KEY
 ```
 
@@ -134,6 +137,7 @@ python scripts/load_data.py        # CSVs -> data/maintagent.duckdb
 python scripts/train_model.py      # train and test the risk model
 python scripts/ablation.py         # the ablation table above
 python scripts/ask.py "Makine 20 neden riskli, ne yapmalıyım?"
+python scripts/eval_retrieval.py   # manual search comparison above
 python scripts/eval_agent.py       # agent evaluation (resumes where it stopped)
 uvicorn maintagent.api:create_app --factory --reload   # API on :8000, docs at /docs
 ```

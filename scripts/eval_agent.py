@@ -14,6 +14,7 @@ Kullanım:
     python scripts/eval_agent.py --limit 5        # en fazla 5 senaryo
     python scripts/eval_agent.py --summary        # sadece özet (LLM çağırmaz)
     python scripts/eval_agent.py --run v1 --summary
+    python scripts/eval_agent.py --search bm25    # v1 ile aynı arama; sadece v2 değişiklikleri ölçülür
 """
 
 import argparse
@@ -29,7 +30,7 @@ from maintagent import config  # noqa: E402
 from maintagent.agent import GroqLLM, LLMError, RateLimited  # noqa: E402
 from maintagent.evaluation import (append_record, load_records, make_scenarios, run_scenario,  # noqa: E402
                                    summarize, to_frame)
-from maintagent.manual import ManualSearch, load_chunks  # noqa: E402
+from maintagent.manual import build_search, load_chunks  # noqa: E402
 from maintagent.model import load  # noqa: E402
 
 EVAL_DIR = config.ROOT_DIR / "data" / "eval"
@@ -49,10 +50,10 @@ def line(r: dict) -> str:
     return f"{verdict} | {r['arac_sayisi']} araç, {r['token']:,} token, {r['sure_sn']} sn"
 
 
-def write_summary(records: list[dict], path: Path, run: str) -> str:
+def write_summary(records: list[dict], path: Path, run: str, search: str) -> str:
     table = summarize(records)
     path.write_text(f"# Ajan değerlendirmesi ({run})\n\nLLM: `{config.GROQ_MODEL}` (akıl yürütme: "
-                    f"`{config.GROQ_REASONING_EFFORT}`), kılavuz araması: `{config.MANUAL_SEARCH}`\n\n{table}\n",
+                    f"`{config.GROQ_REASONING_EFFORT}`), kılavuz araması: `{search}`\n\n{table}\n",
                     encoding="utf-8")
     return table
 
@@ -62,6 +63,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Bu çalıştırmada en fazla kaç senaryo")
     ap.add_argument("--summary", action="store_true", help="Sadece kayıtlı sonuçların özetini yaz")
     ap.add_argument("--run", default="v2", help="Sonuç dosyalarının sürüm adı (varsayılan v2)")
+    ap.add_argument("--search", default=config.MANUAL_SEARCH,
+                    help="Kılavuz arama yöntemi. v1 ile karşılaştırırken tek değişken kalsın diye: --search bm25")
     args = ap.parse_args()
     results_path = EVAL_DIR / f"agent_runs_{args.run}.jsonl"
     summary_path = EVAL_DIR / f"agent_summary_{args.run}.md"
@@ -82,7 +85,7 @@ def main() -> int:
         todo = pending[: args.limit] if args.limit else pending
         print(f"{len(done)} senaryo daha önce bitmiş; şimdi {len(todo)} senaryo çalışacak.\n")
         model = load(config.ROOT_DIR / "models")
-        manual = ManualSearch(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
+        manual, method = build_search(load_chunks(config.MANUAL_PATH), args.search)
         llm = GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL, config.GROQ_REASONING_EFFORT)
         for n, sc in enumerate(todo, 1):
             print(f"[{n}/{len(todo)}] {sc['id']} makine {sc['machine_id']}, {sc['as_of']} ({sc['tur']}) ... ",
@@ -106,7 +109,7 @@ def main() -> int:
         return 0
     remaining = len(scenarios) - len(records)
     print(f"\n{len(records)}/{len(scenarios)} senaryonun özeti" + (f" ({remaining} senaryo kaldı)" if remaining else ""))
-    print(write_summary(records, summary_path, args.run))
+    print(write_summary(records, summary_path, args.run, args.search))
 
     misses = to_frame(records)
     wrong = misses[(misses.tur == "ariza") & (misses.ajan_bilesen.isna() | ~misses.taslak)]

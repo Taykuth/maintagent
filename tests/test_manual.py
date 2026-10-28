@@ -94,3 +94,14 @@ def test_hybrid_returns_every_chunk_once(chunks):
 def test_unknown_method_is_rejected(chunks):
     with pytest.raises(ValueError):
         ManualSearch(chunks, "faiss")
+
+
+def test_build_search_falls_back_to_bm25_without_embeddings(chunks, monkeypatch):
+    import maintagent.manual as manual_mod
+
+    def missing():
+        raise ImportError("sentence_transformers")
+
+    monkeypatch.setattr(manual_mod, "e5_embedder", missing)
+    search, method = manual_mod.build_search(chunks, "hybrid")
+    assert method == "bm25" and search.method == "bm25"

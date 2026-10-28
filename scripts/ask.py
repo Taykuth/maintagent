@@ -15,7 +15,7 @@ import duckdb  # noqa: E402
 
 from maintagent import config  # noqa: E402
 from maintagent.agent import GroqLLM, LLMError, run_agent  # noqa: E402
-from maintagent.manual import ManualSearch, load_chunks  # noqa: E402
+from maintagent.manual import build_search, load_chunks  # noqa: E402
 from maintagent.tools import Toolbox  # noqa: E402
 from maintagent.work_orders import WorkOrderStore  # noqa: E402
 
@@ -42,11 +42,11 @@ def main() -> int:
         return 1
     question = " ".join(sys.argv[1:])
     con = duckdb.connect(str(config.DB_PATH), read_only=True)
-    manual = ManualSearch(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
+    manual, method = build_search(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
     toolbox = Toolbox(con, config.ROOT_DIR / "models", config.AS_OF, manual=manual,
                       orders=WorkOrderStore(config.WORK_ORDERS_DB))
 
-    print(f"Şu an: {config.AS_OF}  |  Model: {config.GROQ_MODEL}  |  Kılavuz araması: {config.MANUAL_SEARCH}")
+    print(f"Şu an: {config.AS_OF}  |  Model: {config.GROQ_MODEL}  |  Kılavuz araması: {method}")
     print(f"Soru: {question}")
     try:
         result = run_agent(question, toolbox, GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL,

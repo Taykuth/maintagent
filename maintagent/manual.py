@@ -1,9 +1,13 @@
 """Bakım kılavuzunda arama.
 
-Üç yöntem var. Hangisinin kullanılacağına ölçüm karar verir (scripts/eval_retrieval.py):
+Üç yöntem var. Hangisinin kullanılacağına ölçüm karar verdi (scripts/eval_retrieval.py):
   - bm25: kelime eşleşmesi. Hızlı, model gerektirmez; eş anlamlıları kaçırır.
   - embedding: anlam benzerliği (multilingual-e5-small). Eş anlamlıları yakalar; model indirmek gerekir.
   - hybrid: iki sıralamayı Reciprocal Rank Fusion (RRF) ile birleştirir.
+
+Karar kuralı sonuçlar görülmeden konuldu: embedding ya da hibrit, doğru bölümü ilk 3'te bulmada
+BM25'i en az 0,10 geçerse hibrit kullanılacak. 20 soruda BM25 0,85, embedding 0,90, hibrit 1,00
+buldu; varsayılan bu yüzden hibrit.
 
 Kılavuz küçük (~35 parça). Bu yüzden vektör veritabanı ya da FAISS yok: sorguyu
 bütün parçalarla karşılaştırmak numpy ile milisaniyeler sürer.
@@ -150,3 +154,16 @@ class ManualSearch:
 
     def search(self, query: str, k: int = 3) -> list[Chunk]:
         return [self.chunks[i] for i in self.ranking(query)[:k]]
+
+
+def build_search(chunks: list[Chunk], method: str) -> tuple[ManualSearch, str]:
+    """İstenen yöntemle arama kurar. sentence-transformers kurulu değilse BM25'e düşer ve bunu söyler.
+
+    Gerçekte kullanılan yöntemi de döndürür; API bunu /api/health'te gösterir.
+    """
+    try:
+        return ManualSearch(chunks, method), method
+    except ImportError:
+        print(f"Uyarı: '{method}' araması için sentence-transformers kurulu değil; BM25 kullanılıyor. "
+              "Kurmak için: pip install -r requirements-embed.txt")
+        return ManualSearch(chunks, "bm25"), "bm25"
