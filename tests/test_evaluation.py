@@ -7,8 +7,9 @@ import pytest
 from conftest import ScriptedLLM, answer, call
 
 from maintagent import config
-from maintagent.evaluation import (append_record, is_grounded, load_records, make_scenarios, numbers_in_text,
-                                   predicted_component, run_scenario, summarize, ungrounded_numbers)
+from maintagent.evaluation import (append_record, load_records, make_scenarios, predicted_component, run_scenario,
+                                   summarize)
+from maintagent.grounding import invented_units, is_grounded, numbers_in_text, ungrounded_numbers
 from maintagent.manual import ManualSearch, load_chunks
 
 START, END = datetime(2015, 6, 1), datetime(2015, 12, 31)
@@ -25,8 +26,14 @@ def test_grounding_allows_rounding_only(x, ok):
 
 
 def test_ungrounded_numbers_finds_the_invented_one():
-    steps = [{"tool": "get_machine_report", "result": {"risk": 97.9, "not": "normal 445,6"}}]
-    assert ungrounded_numbers("Risk %97,9; normal 446; ayrıca 123.", steps, extra=set()) == [123.0]
+    results = [{"risk": 97.9, "not": "normal 445,6", "degisim_yuzde": -0.6}]
+    # -0,6 aracın değeri; cevapta "%0,6 altında" yazılması uydurma değil
+    assert ungrounded_numbers("Risk %97,9; normal 446; %0,6 altında; ayrıca 123.", results, extra=set()) == [123.0]
+
+
+def test_invented_units():
+    assert invented_units("Dönüş hızı 373 rpm, voltaj 168,6 V, basınç 124 bar.") == ["bar", "rpm", "v"]
+    assert invented_units("Voltaj 168,6; ve normal.") == []
 
 
 def test_predicted_component_prefers_the_draft():
@@ -71,11 +78,14 @@ def test_run_scenario_scores_a_full_run(synthetic_env, scenarios):
         call("search_manual", query="kontrol adımları"),
         call("draft_work_order", machine_id=sc["machine_id"], component=comp, reason="r", steps=["Kilitle"]),
         answer(f"**Durum:** {comp} arızası bekleniyor.\n**Kanıt:** 4321 değeri\n**Öneri:** Kilitle, 4 saat."),
+        answer(f"**Durum:** {comp} arızası bekleniyor.\n**Kanıt:** yine 4321\n**Öneri:** Kilitle, 4 saat."),
     ])
     manual = ManualSearch(load_chunks(config.MANUAL_PATH), "bm25")
     r = run_scenario(sc, con, model_dir, manual, llm, sleep=lambda s: None)
     assert r["taslak"] and r["ajan_bilesen"] == comp and r["bilesen_dogru"] is True
-    assert r["dayanaksiz_sayilar"] == [4321.0]  # uydurma sayı yakalandı; "4 saat" kılavuzda geçiyor
+    assert r["dogrulama"] == {"sayilar": [4321.0]}  # doğrulama ilk cevapta yakaladı ("4 saat" kılavuzda geçiyor)
+    assert r["dayanaksiz_sayilar"] == [4321.0]       # model düzeltmedi; ikinci cevap yine de kabul edildi
+    assert r["araclar"][0]["tool"] == "get_machine_report"
     assert r["bicim_ok"] and r["yanlis_alarm"] is None and r["arac_sayisi"] == 3
 
 
@@ -94,5 +104,5 @@ def test_summary_and_records_roundtrip(tmp_path):
     table = summarize(records)
     assert "| Bileşen doğru (ajan) | 1/1 (%100) |" in table
     assert "| Yanlış alarm: hatalı-arızasız | 1/1 (%100) |" in table
-    assert "| Uydurma birim içeren cevap | 2/2 (%100) |" in table
+    assert "| Uydurma birim içeren cevap (son hâli) | 2/2 (%100) |" in table
     json.dumps(records)  # kayıtlar JSON'a çevrilebilir olmalı

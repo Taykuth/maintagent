@@ -12,6 +12,7 @@ type Step =
   | { kind: "tool"; tool: string; args: Record<string, unknown>; result?: Record<string, unknown>; ms?: number }
   | { kind: "nudge"; missing: Record<string, string[]> }
   | { kind: "waiting"; seconds: number }
+  | { kind: "revise"; numbers: number[]; units: string[]; sections: string[] }
   | { kind: "error"; message: string };
 
 type Answer = Extract<AgentEvent, { type: "answer" }>;
@@ -124,6 +125,12 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
         break;
       case "waiting":
         setSteps((s) => [...s, { kind: "waiting", seconds: e.seconds }]);
+        break;
+      case "revise":
+        setSteps((s) => [
+          ...s,
+          { kind: "revise", numbers: e.sayilar ?? [], units: e.birimler ?? [], sections: e.eksik_bolumler ?? [] },
+        ]);
         break;
       case "answer":
         setAnswer(e);
@@ -297,7 +304,7 @@ function StepDot({ step }: { step: Step }) {
   const failed = step.kind === "error" || (step.kind === "tool" && typeof step.result?.hata === "string");
   const color = failed
     ? "bg-critical"
-    : step.kind === "nudge" || step.kind === "waiting"
+    : step.kind === "nudge" || step.kind === "waiting" || step.kind === "revise"
       ? "bg-warning"
       : pending
         ? "bg-trace pulse"
@@ -315,6 +322,18 @@ function StepBody({ step }: { step: Step }) {
           {Object.entries(step.missing)
             .map(([m, tools]) => `makine ${m}: ${tools.map((t) => TOOL_NAMES[t] ?? t).join(", ")}`)
             .join("; ")}
+        </p>
+      </div>
+    );
+  if (step.kind === "revise")
+    return (
+      <div>
+        <p className="text-ink">Cevap doğrulaması devreye girdi</p>
+        <p className="text-ink-2">
+          İlk cevap gösterilmeden düzelttirildi.
+          {step.numbers.length > 0 && ` Araç çıktısında olmayan sayılar: ${step.numbers.map(fmt).join("; ")}.`}
+          {step.units.length > 0 && ` Veride olmayan birimler: ${step.units.join(", ")}.`}
+          {step.sections.length > 0 && ` Eksik bölüm: ${step.sections.join(", ")}.`}
         </p>
       </div>
     );

@@ -15,6 +15,8 @@ DB_PATH = Path(os.getenv("DB_PATH", ROOT_DIR / "data" / "maintagent.duckdb"))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+# gpt-oss modellerinde akıl yürütme düzeyi (low, medium, high). Düşük: daha az token, dakikalık sınıra daha geç takılır.
+GROQ_REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
 
 # Uygulamanın "şu an" kabul ettiği an. Veri 2015 yılına ait olduğu için
 # gerçek saati kullanamayız. Tüm araçlar bu tarihten SONRAKİ veriyi görmemeli,

@@ -6,10 +6,14 @@ yaklaşık 10.000 token harcadığı için 24 senaryo tek günde bitmeyebilir. B
   - tekrar çalıştırılınca bitmiş senaryoları atlar, kaldığı yerden devam eder,
   - günlük sınıra takılınca durur ve kaç senaryo kaldığını söyler.
 
+Her ajan sürümü ayrı dosyalara yazılır (--run): agent_runs_<sürüm>.jsonl, agent_summary_<sürüm>.md.
+v1: ilk sürüm. v2: düşük riskte prosedür önermeyen prompt ve cevap doğrulaması eklenmiş sürüm.
+
 Kullanım:
-    python scripts/eval_agent.py             # kalan bütün senaryolar
-    python scripts/eval_agent.py --limit 5   # en fazla 5 senaryo
-    python scripts/eval_agent.py --summary   # sadece özet (LLM çağırmaz)
+    python scripts/eval_agent.py                  # v2, kalan bütün senaryolar
+    python scripts/eval_agent.py --limit 5        # en fazla 5 senaryo
+    python scripts/eval_agent.py --summary        # sadece özet (LLM çağırmaz)
+    python scripts/eval_agent.py --run v1 --summary
 """
 
 import argparse
@@ -30,8 +34,6 @@ from maintagent.model import load  # noqa: E402
 
 EVAL_DIR = config.ROOT_DIR / "data" / "eval"
 SCENARIOS = EVAL_DIR / "agent_scenarios.json"
-RESULTS = EVAL_DIR / "agent_runs.jsonl"
-SUMMARY = EVAL_DIR / "agent_summary.md"
 
 
 def line(r: dict) -> str:
@@ -40,16 +42,18 @@ def line(r: dict) -> str:
         verdict += ", taslak açıldı" if r["taslak"] else ", taslak YOK"
     else:
         verdict = "YANLIŞ ALARM" if r["yanlis_alarm"] else "alarm yok"
+    if r.get("dogrulama"):
+        verdict += ", doğrulama düzeltti"
     if r["dayanaksiz_sayilar"]:
-        verdict += f", dayanaksız sayı: {r['dayanaksiz_sayilar']}"
+        verdict += f", dayanaksız sayı kaldı: {r['dayanaksiz_sayilar']}"
     return f"{verdict} | {r['arac_sayisi']} araç, {r['token']:,} token, {r['sure_sn']} sn"
 
 
-def write_summary(records: list[dict]) -> str:
+def write_summary(records: list[dict], path: Path, run: str) -> str:
     table = summarize(records)
-    model = config.GROQ_MODEL
-    SUMMARY.write_text(f"# Ajan değerlendirmesi\n\nLLM: `{model}`, kılavuz araması: `{config.MANUAL_SEARCH}`\n\n"
-                       f"{table}\n", encoding="utf-8")
+    path.write_text(f"# Ajan değerlendirmesi ({run})\n\nLLM: `{config.GROQ_MODEL}` (akıl yürütme: "
+                    f"`{config.GROQ_REASONING_EFFORT}`), kılavuz araması: `{config.MANUAL_SEARCH}`\n\n{table}\n",
+                    encoding="utf-8")
     return table
 
 
@@ -57,7 +61,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="Bu çalıştırmada en fazla kaç senaryo")
     ap.add_argument("--summary", action="store_true", help="Sadece kayıtlı sonuçların özetini yaz")
+    ap.add_argument("--run", default="v2", help="Sonuç dosyalarının sürüm adı (varsayılan v2)")
     args = ap.parse_args()
+    results_path = EVAL_DIR / f"agent_runs_{args.run}.jsonl"
+    summary_path = EVAL_DIR / f"agent_summary_{args.run}.md"
 
     con = duckdb.connect(str(config.DB_PATH), read_only=True)
     if not SCENARIOS.exists():
@@ -67,7 +74,7 @@ def main() -> int:
         print(f"{len(scenarios)} senaryo oluşturuldu: {SCENARIOS}")
     scenarios = json.loads(SCENARIOS.read_text(encoding="utf-8"))
 
-    records = load_records(RESULTS)
+    records = load_records(results_path)
     done = {r["id"] for r in records}
     pending = [s for s in scenarios if s["id"] not in done]
 
@@ -76,7 +83,7 @@ def main() -> int:
         print(f"{len(done)} senaryo daha önce bitmiş; şimdi {len(todo)} senaryo çalışacak.\n")
         model = load(config.ROOT_DIR / "models")
         manual = ManualSearch(load_chunks(config.MANUAL_PATH), config.MANUAL_SEARCH)
-        llm = GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL)
+        llm = GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL, config.GROQ_REASONING_EFFORT)
         for n, sc in enumerate(todo, 1):
             print(f"[{n}/{len(todo)}] {sc['id']} makine {sc['machine_id']}, {sc['as_of']} ({sc['tur']}) ... ",
                   end="", flush=True)
@@ -90,7 +97,7 @@ def main() -> int:
             except LLMError as e:
                 print(f"\n\nHata: {e}")
                 break
-            append_record(RESULTS, r)
+            append_record(results_path, r)
             records.append(r)
             print(line(r))
 
@@ -99,7 +106,7 @@ def main() -> int:
         return 0
     remaining = len(scenarios) - len(records)
     print(f"\n{len(records)}/{len(scenarios)} senaryonun özeti" + (f" ({remaining} senaryo kaldı)" if remaining else ""))
-    print(write_summary(records))
+    print(write_summary(records, summary_path, args.run))
 
     misses = to_frame(records)
     wrong = misses[(misses.tur == "ariza") & (misses.ajan_bilesen.isna() | ~misses.taslak)]

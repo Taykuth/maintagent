@@ -127,7 +127,7 @@ def test_draft_rejects_bad_input(toolbox, bad):
 def test_agent_calls_tool_then_answers(toolbox):
     llm = ScriptedLLM([call("rank_machines_by_risk", top_n=3), answer("Bitti.")])
     events = []
-    res = run_agent("En riskli 3?", toolbox, llm, on_event=events.append)
+    res = run_agent("En riskli 3?", toolbox, llm, on_event=events.append, verify_answer=False)
     assert res.answer == "Bitti." and len(res.steps) == 1
     assert [e["type"] for e in events] == ["tool_call", "tool_result", "answer"]
     tool_msg = llm.seen[1][-1]
@@ -140,7 +140,7 @@ def test_agent_survives_bad_tool_and_bad_args(toolbox):
     private = {"content": "", "tool_calls": [{"id": "z", "name": "_q", "arguments": '{"sql": "DROP TABLE machines"}'}]}
     missing = call("get_machine_report", machine_id=999)
     llm = ScriptedLLM([bad_name, bad_args, private, missing, answer("Tamam.")])
-    res = run_agent("?", toolbox, llm)
+    res = run_agent("?", toolbox, llm, verify_answer=False)
     assert res.answer == "Tamam."
     assert all("hata" in s["result"] for s in res.steps)
 
@@ -155,7 +155,8 @@ def test_agent_requires_manual_and_draft_for_risky_machine(toolbox):
         answer("Tam cevap."),
     ])
     events = []
-    res = run_agent("Makine 1 neden riskli?", toolbox, llm, on_event=events.append, draft_threshold=0)
+    res = run_agent("Makine 1 neden riskli?", toolbox, llm, on_event=events.append, draft_threshold=0,
+                    verify_answer=False)
     assert res.answer == "Tam cevap." and len(res.steps) == 3
     nudges = [e for e in events if e["type"] == "nudge"]
     assert len(nudges) == 1 and nudges[0]["missing"] == {1: ["search_manual", "draft_work_order"]}
@@ -163,26 +164,67 @@ def test_agent_requires_manual_and_draft_for_risky_machine(toolbox):
     assert len(toolbox.orders.list("taslak")) == 1
 
 
-def test_low_risk_machine_needs_no_draft(toolbox):
-    llm = ScriptedLLM([call("get_machine_report", machine_id=1), call("search_manual", query="rulman"),
-                       answer("Risk düşük.")])
+def test_low_risk_machine_needs_no_manual_or_draft(toolbox):
+    """Risk düşükse kılavuz ve taslak zorunlu değil: sağlam makineye prosedür önerilmemeli."""
+    llm = ScriptedLLM([call("get_machine_report", machine_id=1), answer("Risk düşük.")])
     events = []
-    run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=101)
+    run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=101, verify_answer=False)
     assert all(e["type"] != "nudge" for e in events)
 
 
 def test_agent_nudges_only_once(toolbox):
     llm = ScriptedLLM([call("get_machine_report", machine_id=1), answer("a"), answer("b")])
     events = []
-    res = run_agent("?", toolbox, llm, on_event=events.append)
+    res = run_agent("?", toolbox, llm, on_event=events.append, draft_threshold=0, verify_answer=False)
     assert res.answer == "b" and [e["type"] for e in events].count("nudge") == 1
+
+
+FORMATTED = "**Durum:** {}\n**Kanıt:** rapor\n**Öneri:** planlı bakıma devam"
+
+
+def test_answer_with_invented_numbers_is_revised_once(toolbox):
+    """Araç çıktısında olmayan sayı ve birim içeren cevap kullanıcıya gitmeden bir kez düzelttirilir."""
+    llm = ScriptedLLM([
+        call("get_machine_report", machine_id=1),
+        answer(FORMATTED.format("Titreşim 1357,9 mm/s; kontrol ≈2468 dk sürer.")),
+        answer(FORMATTED.format("Risk raporda belirtildiği gibi.")),
+    ])
+    events = []
+    res = run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=101)
+    revise = [e for e in events if e["type"] == "revise"]
+    assert len(revise) == 1
+    assert revise[0]["sayilar"] == [1357.9, 2468.0] and revise[0]["birimler"] == ["mm/s"]
+    assert "1357,9" in llm.seen[2][-1]["content"] and llm.seen[2][-1]["role"] == "user"
+    assert res.answer == FORMATTED.format("Risk raporda belirtildiği gibi.")
+
+
+def test_revision_happens_only_once(toolbox):
+    bad = answer("eksik biçim")
+    llm = ScriptedLLM([bad, bad])
+    events = []
+    res = run_agent("?", toolbox, llm, on_event=events.append)
+    assert res.answer == "eksik biçim" and [e["type"] for e in events].count("revise") == 1
+
+
+def test_draft_text_written_by_llm_is_not_evidence(toolbox):
+    """Taslağa yazılan uydurma süre, cevaptaki aynı sayıyı doğrulamış sayılmamalı."""
+    llm = ScriptedLLM([
+        call("get_machine_report", machine_id=1),
+        call("search_manual", query="rulman"),
+        call("draft_work_order", machine_id=1, component="comp2", reason="r", steps=["Kilitle (8765 dk)"]),
+        answer(FORMATTED.format("Kilitleme 8765 dk sürer.")),
+        answer(FORMATTED.format("Taslak hazırlandı, onay bekliyor.")),
+    ])
+    events = []
+    run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=0)
+    assert [e["sayilar"] for e in events if e["type"] == "revise"] == [[8765.0]]
 
 
 def test_agent_waits_when_rate_limited(toolbox):
     slept = []
     llm = ScriptedLLM([RateLimited(7), answer("Sonunda.")])
     events = []
-    res = run_agent("?", toolbox, llm, on_event=events.append, sleep=slept.append)
+    res = run_agent("?", toolbox, llm, on_event=events.append, sleep=slept.append, verify_answer=False)
     assert res.answer == "Sonunda." and slept == [7]
     assert events[0] == {"type": "waiting", "seconds": 7}
 

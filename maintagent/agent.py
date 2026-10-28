@@ -9,10 +9,13 @@ Güvenlik önlemleri:
   - En fazla MAX_STEPS LLM turu; sonsuz döngüye girmez.
   - Bilinmeyen araç, bozuk argüman ya da araç hatası programı çökertmez;
     hata mesajı LLM'e geri verilir ve LLM düzeltme şansı bulur.
-  - Adım kontrolü: LLM bir makinenin raporuna bakıp kılavuza bakmadan ya da
-    yüksek riskte iş emri taslağı hazırlamadan cevap vermeye kalkarsa, döngü
-    cevabı bir kez geri çevirir ve eksik adımları söyler. Prompt'a güvenmek
-    yetmedi; ilk denemede model tek araçla cevap verdi.
+  - Adım kontrolü: risk yüksek bir makinede LLM kılavuza bakmadan ya da iş emri
+    taslağı hazırlamadan cevap vermeye kalkarsa, döngü cevabı bir kez geri çevirir
+    ve eksik adımları söyler. Prompt'a güvenmek yetmedi; ilk denemede model tek
+    araçla cevap verdi.
+  - Cevap doğrulama: cevapta araç çıktılarında olmayan bir sayı, veride olmayan bir
+    birim ya da eksik bölüm varsa, cevap kullanıcıya gösterilmeden bir kez
+    düzelttirilir. İlk değerlendirmede cevapların %62'sinde dayanaksız sayı vardı.
   - Groq kullanım sınırına (429) takılınca bekler ve bunu arayüze bildirir.
   - Her adım `on_event` ile dışarı bildirilir; arayüz bunları canlı gösterir.
 
@@ -26,6 +29,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
+from maintagent.grounding import invented_units, missing_sections, numbers_in_text, ungrounded_numbers
 from maintagent.tools import TOOL_SCHEMAS, Toolbox
 
 MAX_STEPS = 10
@@ -33,20 +37,29 @@ DRAFT_RISK_THRESHOLD = 50.0  # kılavuz: risk %50 ve üstü "yüksek" öncelik
 MAX_WAIT_SECONDS = 60        # daha uzun bekleme gerekiyorsa (ör. günlük sınır) vazgeç
 RATE_LIMIT_RETRIES = 3
 
+# İlk değerlendirmeden sonra eklenen kurallar: düşük riskte prosedür önerme, adım başına süre
+# uydurma, hesap yapma. Değerlendirmede bunların hepsi gerçek cevaplarda görüldü.
 SYSTEM_PROMPT = """Fabrika bakım mühendislerine yardım eden asistansın. Şu an: {as_of}; sonrasını bilemezsin.
 Kurallar:
-- Her sayıyı araç çıktısından al, uydurma.
-- Bir makine sorulursa önce get_machine_report, sonra en olası bileşen için search_manual (kontrol adımları, süre, parça).
-- Risk %{threshold:.0f} veya üstündeyse draft_work_order ile iş emri taslağı oluştur; adım ve parçaları kılavuzdan al.
-  Taslak bakım şefinin onayını bekler: "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
+- Her sayıyı araç çıktısından al; uydurma, hesaplama yapma.
+- Bir makine sorulursa önce get_machine_report çağır.
+- Risk %{threshold:.0f} veya üstündeyse: search_manual ile en olası bileşenin kontrol adımlarına, süresine ve
+  parçalarına bak, sonra draft_work_order ile iş emri taslağı oluştur. Taslak bakım şefinin onayını bekler:
+  "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
+- Risk %{threshold:.0f}'nin altındaysa iş emri ve bakım prosedürü önerme; "acil işlem gerekmiyor, planlı bakıma
+  devam" de. Belirgin sapan sensör varsa izlenmesini öner.
+- Süre olarak sadece kılavuzdaki toplam süreyi yaz; adım başına süre yazma.
+- Veride birim yok: sayıların yanına rpm, V, bar, mm/s gibi birim yazma.
 - Bileşeni kod ve adıyla yaz: "compN (bileşen adı)". Sensörü normaliyle karşılaştır: "<sensör> normalin %X altında/üstünde".
-- Veride birim yok; rpm, V, bar gibi birim ekleme.
 - Sensör sapması genelde bileşen sorunudur; sensör arızası kanıtı yoksa kalibrasyon önerme.
 - Emin değilsen söyle. Türkçe ve kısa yaz.
 Biçim:
 **Durum:** tek cümle.
 **Kanıt:** 3-5 madde, sayılarla.
-**Öneri:** kılavuzdaki adımlar, süre ve parça, kaynak bölüm; taslak hazırlandıysa numarası."""
+**Öneri:** yapılacaklar; risk yüksekse kılavuzdaki adımlar, toplam süre, parça, kaynak bölüm ve taslak numarası."""
+
+# Taslağın bu alanlarını LLM yazdı; sayı kontrolünde kanıt sayılmaz (yoksa uydurma süre kendini doğrular).
+LLM_WRITTEN_FIELDS = {"reason", "steps", "parts", "estimated_hours", "manual_section", "note", "created_at"}
 
 
 class LLMError(Exception):
@@ -120,14 +133,14 @@ class AgentResult:
 def run_agent(question: str, toolbox: Toolbox, llm: LLM,
               on_event: Callable[[dict], None] | None = None, max_steps: int = MAX_STEPS,
               draft_threshold: float = DRAFT_RISK_THRESHOLD,
-              sleep: Callable[[float], None] = time.sleep) -> AgentResult:
+              sleep: Callable[[float], None] = time.sleep, verify_answer: bool = True) -> AgentResult:
     emit = on_event or (lambda e: None)
     t0 = time.perf_counter()
     messages = [{"role": "system", "content": SYSTEM_PROMPT.format(as_of=toolbox.as_of, threshold=draft_threshold)},
                 {"role": "user", "content": question}]
     steps: list[dict] = []
     tokens = 0
-    nudged = False
+    nudged = revised = False
 
     def finish(answer: str, stopped_early: bool = False) -> AgentResult:
         seconds = time.perf_counter() - t0
@@ -150,6 +163,14 @@ def run_agent(question: str, toolbox: Toolbox, llm: LLM,
                 messages.append({"role": "user", "content":
                                  f"[Otomatik kontrol] Cevap vermeden önce eksik adımları tamamla: {todo}. "
                                  "Sonra cevabı aynı biçimde yeniden yaz."})
+                continue
+            problems = answer_problems(question, reply["content"], steps, toolbox.as_of) if verify_answer else {}
+            if problems and not revised:
+                # Cevap kullanıcıya gitmeden bir kez düzelttirilir; ikinci cevap ne olursa kabul edilir.
+                revised = True
+                emit({"type": "revise", **problems})
+                messages.append({"role": "assistant", "content": reply["content"]})
+                messages.append({"role": "user", "content": _revise_message(problems)})
                 continue
             return finish(reply["content"])
 
@@ -193,12 +214,12 @@ def _machine_id(step: dict) -> int | None:
 
 
 def _missing_steps(steps: list[dict], draft_threshold: float) -> dict[int, list[str]]:
-    """Raporuna bakılan her makine için eksik kalan adımları döndürür.
+    """Riski eşiğin üstünde olan her makine için eksik kalan adımları döndürür.
 
-    - Kılavuz araması makineye bağlı değil; bir başarılı arama yeterli.
-    - Risk eşiğin üstündeyse o makine için iş emri taslağı da gerekli.
-    Hata dönen çağrılar sayılmaz. Raporuna bakılmayan makineler kontrol edilmez
-    (ör. "En riskli 3 makine hangileri?" sorusu).
+    Risk yüksekse kılavuz araması ve o makine için iş emri taslağı gerekir. Kılavuz
+    araması makineye bağlı değil; bir başarılı arama yeterli. Risk düşükse hiçbir adım
+    zorunlu değildir: ilk değerlendirmede bu zorunluluk, sağlam makinelere gereksiz
+    bakım prosedürü önermeye yol açtı. Hata dönen çağrılar sayılmaz.
     """
     ok = [(s["tool"], _machine_id(s), s["result"]) for s in steps if "hata" not in s["result"]]
     reported = {m: r["risk"]["ariza_riski_24_saat_yuzde"] for tool, m, r in ok
@@ -207,12 +228,49 @@ def _missing_steps(steps: list[dict], draft_threshold: float) -> dict[int, list[
     drafted = {m for tool, m, _ in ok if tool == "draft_work_order"}
     missing = {}
     for m, risk in sorted(reported.items()):
+        if risk < draft_threshold:
+            continue
         need = [] if manual_done else ["search_manual"]
-        if risk >= draft_threshold and m not in drafted:
+        if m not in drafted:
             need.append("draft_work_order")
         if need:
             missing[m] = need
     return missing
+
+
+def evidence(steps: list[dict]) -> list[dict]:
+    """Sayı kontrolünde kanıt sayılan araç çıktıları. Taslağın LLM'in yazdığı alanları hariç."""
+    out = []
+    for s in steps:
+        r = s["result"]
+        if s["tool"] == "draft_work_order" and isinstance(r.get("is_emri"), dict):
+            r = {k: v for k, v in r["is_emri"].items() if k not in LLM_WRITTEN_FIELDS}
+        out.append(r)
+    return out
+
+
+def answer_problems(question: str, answer: str, steps: list[dict], as_of) -> dict:
+    """Cevaptaki dayanaksız sayılar, uydurma birimler ve eksik bölümler. Sorun yoksa boş sözlük."""
+    extra = {float(as_of.year), float(as_of.month), float(as_of.day), float(as_of.hour)}
+    extra |= set(numbers_in_text(question))
+    problems = {"sayilar": ungrounded_numbers(answer, evidence(steps), extra),
+                "birimler": invented_units(answer),
+                "eksik_bolumler": missing_sections(answer)}
+    return {k: v for k, v in problems.items() if v}
+
+
+def _revise_message(problems: dict) -> str:
+    fmt = lambda x: f"{x:g}".replace(".", ",")  # noqa: E731
+    lines = ["[Otomatik kontrol] Cevabı kullanıcıya göstermeden önce düzelt:"]
+    if "sayilar" in problems:
+        lines.append(f"- Şu sayılar araç çıktılarında yok: {'; '.join(fmt(x) for x in problems['sayilar'])}. "
+                     "Bunları çıkar. Süre için sadece kılavuzdaki toplam süreyi yaz.")
+    if "birimler" in problems:
+        lines.append(f"- Veride birim yok, şunları kaldır: {', '.join(problems['birimler'])}.")
+    if "eksik_bolumler" in problems:
+        lines.append(f"- Eksik bölüm: {', '.join(problems['eksik_bolumler'])}. Biçim: **Durum:**, **Kanıt:**, **Öneri:**.")
+    lines.append("Yeni sayı ekleme; cevabı aynı biçimde yeniden yaz.")
+    return "\n".join(lines)
 
 
 def _execute(toolbox: Toolbox, name: str, raw_args: str) -> dict:

@@ -29,6 +29,9 @@ def show(event: dict) -> None:
         print(f"  ← {text[:300]}{'...' if len(text) > 300 else ''}  ({event['ms']} ms)", flush=True)
     elif t == "nudge":
         print(f"\n! Adım kontrolü: cevap geri çevrildi, eksik: {event['missing']}", flush=True)
+    elif t == "revise":
+        found = {k: v for k, v in event.items() if k != "type"}
+        print(f"\n! Cevap doğrulaması: ilk cevap düzelttirildi {found}", flush=True)
     elif t == "waiting":
         print(f"\n… Groq dakikalık sınırı: {event['seconds']} sn bekleniyor", flush=True)
 
@@ -46,7 +49,8 @@ def main() -> int:
     print(f"Şu an: {config.AS_OF}  |  Model: {config.GROQ_MODEL}  |  Kılavuz araması: {config.MANUAL_SEARCH}")
     print(f"Soru: {question}")
     try:
-        result = run_agent(question, toolbox, GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL),
+        result = run_agent(question, toolbox, GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL,
+                                                   config.GROQ_REASONING_EFFORT),
                            on_event=show)
     except LLMError as e:
         print(f"\nHata: {e}")

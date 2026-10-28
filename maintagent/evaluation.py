@@ -27,7 +27,8 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from maintagent.agent import LLM, run_agent
+from maintagent.agent import LLM, evidence, run_agent
+from maintagent.grounding import invented_units, missing_sections, numbers_in_text, ungrounded_numbers
 from maintagent.manual import ManualSearch
 from maintagent.tools import Toolbox
 from maintagent.work_orders import WorkOrderStore
@@ -36,17 +37,6 @@ TEST_START = datetime(2015, 8, 2)
 TEST_END = datetime(2015, 12, 31)
 LEAD_HOURS = (3, 12, 21)
 QUESTION = "Makine {machine_id} için durum nedir, ne yapmalıyım?"  # bilerek yönlendirmesiz: "riskli" demiyor
-
-# Cevapta geçmesi doğal olan ama araç çıktısında sayı olarak bulunmayan değerler:
-# pencere uzunlukları (24 saat, 7 gün, 30 gün), eşikler (%50, %80) ve kılavuz aralıkları.
-CONTEXT_NUMBERS = {3.0, 5.0, 7.0, 24.0, 30.0, 48.0, 50.0, 72.0, 80.0}
-
-# Veride birim yok; bunlardan biri cevapta geçiyorsa model uydurmuş demektir.
-UNIT_PATTERN = re.compile(r"\b(rpm|psi|bar|kpa|hz|volt|mm/s|°c)\b", re.IGNORECASE)
-
-# Harf, alt çizgi, nokta ya da tireye yapışık rakamları almaz: comp2, E3, RL-02, model3 sayı değildir.
-NUMBER_PATTERN = re.compile(r"(?<![\w.\-])\d+(?:[.,]\d+)?")
-
 
 # --- Senaryolar ------------------------------------------------------------------
 
@@ -126,49 +116,6 @@ def make_scenarios(con: duckdb.DuckDBPyConnection, n_failure: int = 12, n_error_
 
 # --- Puanlama --------------------------------------------------------------------
 
-def numbers_in_text(text: str) -> list[float]:
-    """Metindeki sayılar. Türkçe ondalık virgülü de okunur: '15,2' -> 15.2."""
-    return [float(n.replace(",", ".")) for n in NUMBER_PATTERN.findall(text)]
-
-
-def tool_numbers(obj) -> set[float]:
-    """Araç çıktılarında geçen bütün sayılar (metin alanlarının içindekiler dahil)."""
-    found: set[float] = set()
-    if isinstance(obj, bool):
-        return found
-    if isinstance(obj, (int, float)):
-        found.add(float(obj))
-    elif isinstance(obj, str):
-        found.update(numbers_in_text(obj))
-    elif isinstance(obj, dict):
-        for v in obj.values():
-            found |= tool_numbers(v)
-    elif isinstance(obj, (list, tuple)):
-        for v in obj:
-            found |= tool_numbers(v)
-    return found
-
-
-def is_grounded(x: float, pool: set[float]) -> bool:
-    """x, havuzdaki bir sayının kendisi ya da yuvarlanmış hâli mi?
-
-    377,68 -> 377,7 (bir ondalık) ve 445,6 -> 446 (tam sayı) kabul. 15,2 -> 16 kabul değil.
-    """
-    for y in pool:
-        if abs(x - y) <= 0.051 + 1e-9:
-            return True
-        if x == int(x) and abs(x - y) <= 0.5 + 1e-9:
-            return True
-    return False
-
-
-def ungrounded_numbers(answer: str, steps: list[dict], extra: set[float]) -> list[float]:
-    pool = set(extra) | CONTEXT_NUMBERS
-    for s in steps:
-        pool |= tool_numbers(s["result"])
-    return [x for x in numbers_in_text(answer) if not is_grounded(x, pool)]
-
-
 def predicted_component(answer: str, steps: list[dict]) -> str | None:
     """Ajanın işaret ettiği bileşen: önce açtığı taslak, yoksa cevaptaki 'Durum' satırı."""
     for s in steps:
@@ -186,6 +133,7 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict)
     positive = sc["tur"] == "ariza"
     extra = {float(sc["machine_id"]), float(as_of.year), float(as_of.month), float(as_of.day), float(as_of.hour)}
     extra |= set(numbers_in_text(question))
+    revise = next((e for e in events if e["type"] == "revise"), None)
     return {
         **sc,
         "model_risk": model_pred["ariza_riski_24_saat_yuzde"],
@@ -195,9 +143,12 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict)
         "bilesen_dogru": (comp in sc["gercek_bilesenler"]) if positive else None,
         "model_bilesen_dogru": (model_pred["en_olasi_bilesen"] in sc["gercek_bilesenler"]) if positive else None,
         "yanlis_alarm": None if positive else bool(drafts),
-        "dayanaksiz_sayilar": ungrounded_numbers(result.answer, result.steps, extra),
-        "uydurma_birim": sorted({u.lower() for u in UNIT_PATTERN.findall(result.answer)}),
-        "bicim_ok": all(k in result.answer for k in ("Durum", "Kanıt", "Öneri")),
+        # Son cevaptaki sorunlar (doğrulama düzelttikten sonra kalanlar)
+        "dayanaksiz_sayilar": ungrounded_numbers(result.answer, evidence(result.steps), extra),
+        "uydurma_birim": invented_units(result.answer),
+        "bicim_ok": not missing_sections(result.answer),
+        # Doğrulamanın ilk cevapta yakaladıkları
+        "dogrulama": {k: v for k, v in (revise or {}).items() if k != "type"},
         "adim_kontrolu": any(e["type"] == "nudge" for e in events),
         "bekleme_sn": sum(e["seconds"] for e in events if e["type"] == "waiting"),
         "arac_sayisi": len(result.steps),
@@ -205,6 +156,8 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict)
         "sure_sn": round(result.seconds, 1),
         "durdu": result.stopped_early,
         "cevap": result.answer,
+        # Sonradan yeniden puanlayabilmek için araç çıktıları da saklanır
+        "araclar": [{"tool": s["tool"], "arguments": s["arguments"], "result": s["result"]} for s in result.steps],
     }
 
 
@@ -242,9 +195,11 @@ def summarize(records: list[dict]) -> str:
         ("Arızada iş emri taslağı açıldı", _rate(sum(r["taslak"] for r in pos), len(pos))),
         ("Yanlış alarm: hatalı-arızasız", _rate(sum(r["yanlis_alarm"] for r in hard), len(hard))),
         ("Yanlış alarm: sakin", _rate(sum(r["yanlis_alarm"] for r in quiet), len(quiet))),
-        ("Dayanaksız sayı içeren cevap", _rate(sum(bool(r["dayanaksiz_sayilar"]) for r in records), len(records))),
-        ("Uydurma birim içeren cevap", _rate(sum(bool(r["uydurma_birim"]) for r in records), len(records))),
-        ("Biçime uyan cevap", _rate(sum(r["bicim_ok"] for r in records), len(records))),
+        ("Doğrulama ilk cevabı düzelttirdi", _rate(sum(bool(r.get("dogrulama")) for r in records), len(records))),
+        ("Dayanaksız sayı içeren cevap (son hâli)",
+         _rate(sum(bool(r["dayanaksiz_sayilar"]) for r in records), len(records))),
+        ("Uydurma birim içeren cevap (son hâli)", _rate(sum(bool(r["uydurma_birim"]) for r in records), len(records))),
+        ("Biçime uyan cevap (son hâli)", _rate(sum(r["bicim_ok"] for r in records), len(records))),
         ("Adım kontrolü devreye girdi", _rate(sum(r["adim_kontrolu"] for r in records), len(records))),
         ("Adım sınırında durdu", _rate(sum(r["durdu"] for r in records), len(records))),
         ("Ortalama araç çağrısı", f"{sum(r['arac_sayisi'] for r in records) / max(len(records), 1):.1f}"),

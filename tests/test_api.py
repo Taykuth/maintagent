@@ -13,13 +13,16 @@ from maintagent.manual import ManualSearch, load_chunks
 from maintagent.work_orders import WorkOrderStore
 
 
+OK = "**Durum:** riskli.\n**Kanıt:** rapor\n**Öneri:** taslak hazırlandı, onay bekliyor"
+
+
 @pytest.fixture
 def state(synthetic_env, tmp_path):
     con, model_dir = synthetic_env
     return AppState(con=con, model_dir=model_dir, as_of=AS_OF,
                     manual=ManualSearch(load_chunks(config.MANUAL_PATH), "bm25"),
                     orders=WorkOrderStore(tmp_path / "orders.sqlite"),
-                    make_llm=lambda: ScriptedLLM([answer("varsayılan")]), llm_name="sahte", manual_method="bm25")
+                    make_llm=lambda: ScriptedLLM([answer(OK)]), llm_name="sahte", manual_method="bm25")
 
 
 @pytest.fixture
@@ -60,13 +63,13 @@ def test_ask_streams_steps_and_creates_draft(client, state):
         call("get_machine_report", machine_id=1),
         call("search_manual", query="ana mil rulmanı kontrol adımları"),
         call("draft_work_order", machine_id=1, component="comp2", reason="Risk yüksek", steps=["Kilitle"]),
-        answer("**Durum:** riskli."),
+        answer(OK),
     ])
     r = client.post("/api/ask", json={"question": "Makine 1 neden riskli?"})
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
     events = sse_events(r.text)
     assert [e["type"] for e in events] == ["tool_call", "tool_result"] * 3 + ["answer"]
-    assert events[-1]["content"] == "**Durum:** riskli."
+    assert events[-1]["content"] == OK
 
     drafts = client.get("/api/work-orders", params={"status": "taslak"}).json()
     assert len(drafts) == 1 and drafts[0]["machine_id"] == 1
