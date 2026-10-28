@@ -12,6 +12,7 @@ type Step =
   | { kind: "tool"; tool: string; args: Record<string, unknown>; result?: Record<string, unknown>; ms?: number }
   | { kind: "nudge"; missing: Record<string, string[]> }
   | { kind: "waiting"; seconds: number }
+  | { kind: "tool_error"; message: string }
   | { kind: "revise"; numbers: number[]; units: string[]; sections: string[] }
   | { kind: "error"; message: string };
 
@@ -125,6 +126,9 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
         break;
       case "waiting":
         setSteps((s) => [...s, { kind: "waiting", seconds: e.seconds }]);
+        break;
+      case "tool_error":
+        setSteps((s) => [...s, { kind: "tool_error", message: e.message }]);
         break;
       case "revise":
         setSteps((s) => [
@@ -304,7 +308,7 @@ function StepDot({ step }: { step: Step }) {
   const failed = step.kind === "error" || (step.kind === "tool" && typeof step.result?.hata === "string");
   const color = failed
     ? "bg-critical"
-    : step.kind === "nudge" || step.kind === "waiting" || step.kind === "revise"
+    : step.kind === "nudge" || step.kind === "waiting" || step.kind === "revise" || step.kind === "tool_error"
       ? "bg-warning"
       : pending
         ? "bg-trace pulse"
@@ -323,6 +327,13 @@ function StepBody({ step }: { step: Step }) {
             .map(([m, tools]) => `makine ${m}: ${tools.map((t) => TOOL_NAMES[t] ?? t).join(", ")}`)
             .join("; ")}
         </p>
+      </div>
+    );
+  if (step.kind === "tool_error")
+    return (
+      <div>
+        <p className="text-ink">Araç çağrısı reddedildi</p>
+        <p className="text-ink-2">Model şemaya uymayan bir çağrı üretti; hata modele geri verildi.</p>
       </div>
     );
   if (step.kind === "revise")

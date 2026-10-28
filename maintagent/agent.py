@@ -72,6 +72,14 @@ class RateLimited(LLMError):
         self.wait_seconds = wait_seconds
 
 
+class ToolCallRejected(Exception):
+    """Sağlayıcı, modelin ürettiği araç çağrısını şemaya uymadığı için reddetti (Groq HTTP 400).
+
+    Bu modelin hatası; programı durdurmak yerine hata mesajı modele geri verilir.
+    Örnek: isteğe bağlı bir sayı alanına null yazmak.
+    """
+
+
 class LLM(Protocol):
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         """{"content": str, "tool_calls": [{"id", "name", "arguments"}], "tokens": int} döndürür."""
@@ -103,6 +111,12 @@ class GroqLLM:
                 raise RateLimited(_retry_after(e)) from e
             except oa.AuthenticationError as e:
                 raise LLMError("Groq API anahtarı geçersiz.") from e
+            except oa.BadRequestError as e:
+                text = str(e)
+                if "tool call validation failed" in text.lower() or "failed to call a function" in text.lower():
+                    start = text.find("Tool call")
+                    raise ToolCallRejected((text[start:] if start >= 0 else text)[:300]) from e
+                raise
             except (oa.APIConnectionError, oa.InternalServerError) as e:
                 if attempt == 1:
                     raise LLMError("Groq'a ulaşılamadı; biraz sonra tekrar dene.") from e
@@ -149,7 +163,16 @@ def run_agent(question: str, toolbox: Toolbox, llm: LLM,
         return AgentResult(answer, steps, seconds, stopped_early, tokens)
 
     for _ in range(max_steps):
-        reply = _chat_with_retry(llm, messages, emit, sleep)
+        try:
+            reply = _chat_with_retry(llm, messages, emit, sleep)
+        except ToolCallRejected as e:
+            # Modelin hatası: ne olduğunu söyleyip bir tur daha veriyoruz (adım sınırı sonsuz döngüyü önler).
+            emit({"type": "tool_error", "message": str(e)})
+            messages.append({"role": "user", "content":
+                             f"[Otomatik kontrol] Son araç çağrın şemaya uymadığı için reddedildi: {e}\n"
+                             "Argümanları şemaya uygun yazıp tekrar dene. Değerini bilmediğin isteğe bağlı "
+                             "alanları hiç gönderme (null yazma)."})
+            continue
         tokens += reply.get("tokens", 0)
         if not reply["tool_calls"]:
             missing = _missing_steps(steps, draft_threshold)

@@ -150,6 +150,7 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict)
         # Doğrulamanın ilk cevapta yakaladıkları
         "dogrulama": {k: v for k, v in (revise or {}).items() if k != "type"},
         "adim_kontrolu": any(e["type"] == "nudge" for e in events),
+        "arac_reddi": sum(e["type"] == "tool_error" for e in events),  # sağlayıcının reddettiği araç çağrıları
         "bekleme_sn": sum(e["seconds"] for e in events if e["type"] == "waiting"),
         "arac_sayisi": len(result.steps),
         "token": result.tokens,
@@ -201,6 +202,8 @@ def summarize(records: list[dict]) -> str:
         ("Uydurma birim içeren cevap (son hâli)", _rate(sum(bool(r["uydurma_birim"]) for r in records), len(records))),
         ("Biçime uyan cevap (son hâli)", _rate(sum(r["bicim_ok"] for r in records), len(records))),
         ("Adım kontrolü devreye girdi", _rate(sum(r["adim_kontrolu"] for r in records), len(records))),
+        ("Araç çağrısı şemaya uymadı (en az bir kez)",
+         _rate(sum(bool(r.get("arac_reddi")) for r in records), len(records))),
         ("Adım sınırında durdu", _rate(sum(r["durdu"] for r in records), len(records))),
         ("Ortalama araç çağrısı", f"{sum(r['arac_sayisi'] for r in records) / max(len(records), 1):.1f}"),
         ("Token (medyan / en çok)", f"{tokens[len(tokens) // 2]:,} / {tokens[-1]:,}" if tokens else "-"),

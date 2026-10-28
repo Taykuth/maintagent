@@ -32,6 +32,8 @@ def show(event: dict) -> None:
     elif t == "revise":
         found = {k: v for k, v in event.items() if k != "type"}
         print(f"\n! Cevap doğrulaması: ilk cevap düzelttirildi {found}", flush=True)
+    elif t == "tool_error":
+        print(f"\n! Araç çağrısı reddedildi, modele geri verildi: {event['message']}", flush=True)
     elif t == "waiting":
         print(f"\n… Groq dakikalık sınırı: {event['seconds']} sn bekleniyor", flush=True)
 

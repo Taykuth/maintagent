@@ -15,11 +15,14 @@ Kullanım:
     python scripts/eval_agent.py --summary        # sadece özet (LLM çağırmaz)
     python scripts/eval_agent.py --run v1 --summary
     python scripts/eval_agent.py --search bm25    # v1 ile aynı arama; sadece v2 değişiklikleri ölçülür
+    python scripts/eval_agent.py --search bm25 --wait   # sınıra takılınca bekleyip kendiliğinden devam eder
 """
 
 import argparse
 import json
 import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,6 +37,7 @@ from maintagent.manual import build_search, load_chunks  # noqa: E402
 from maintagent.model import load  # noqa: E402
 
 EVAL_DIR = config.ROOT_DIR / "data" / "eval"
+MAX_SLEEP = 3 * 3600  # --wait ile tek seferde en fazla 3 saat beklenir
 SCENARIOS = EVAL_DIR / "agent_scenarios.json"
 
 
@@ -63,6 +67,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Bu çalıştırmada en fazla kaç senaryo")
     ap.add_argument("--summary", action="store_true", help="Sadece kayıtlı sonuçların özetini yaz")
     ap.add_argument("--run", default="v2", help="Sonuç dosyalarının sürüm adı (varsayılan v2)")
+    ap.add_argument("--wait", action="store_true",
+                    help="Groq sınırına takılınca durma; söylenen süre kadar bekleyip devam et (bilgisayar açık kalmalı)")
     ap.add_argument("--search", default=config.MANUAL_SEARCH,
                     help="Kılavuz arama yöntemi. v1 ile karşılaştırırken tek değişken kalsın diye: --search bm25")
     args = ap.parse_args()
@@ -87,14 +93,23 @@ def main() -> int:
         model = load(config.ROOT_DIR / "models")
         manual, method = build_search(load_chunks(config.MANUAL_PATH), args.search)
         llm = GroqLLM(config.GROQ_API_KEY, config.GROQ_MODEL, config.GROQ_BASE_URL, config.GROQ_REASONING_EFFORT)
-        for n, sc in enumerate(todo, 1):
-            print(f"[{n}/{len(todo)}] {sc['id']} makine {sc['machine_id']}, {sc['as_of']} ({sc['tur']}) ... ",
+        n = 0
+        while n < len(todo):
+            sc = todo[n]
+            print(f"[{n + 1}/{len(todo)}] {sc['id']} makine {sc['machine_id']}, {sc['as_of']} ({sc['tur']}) ... ",
                   end="", flush=True)
             try:
                 r = run_scenario(sc, con, config.ROOT_DIR / "models", manual, llm, model=model)
             except RateLimited as e:
+                left = len(todo) - n
+                if args.wait and e.wait_seconds <= MAX_SLEEP:
+                    until = (datetime.now() + timedelta(seconds=e.wait_seconds + 10)).strftime("%H:%M")
+                    print(f"\nGroq sınırı: {e.wait_seconds / 60:.0f} dk bekleniyor, {until} civarı devam edecek "
+                          f"({left} senaryo kaldı). Durdurmak için Ctrl+C; sonra kaldığı yerden devam eder.")
+                    time.sleep(e.wait_seconds + 10)
+                    continue  # aynı senaryoyu baştan dener
                 print(f"\n\nGroq sınırı doldu ({e.wait_seconds:.0f} sn beklemek gerekiyor). "
-                      f"Kalan {len(pending) - n + 1} senaryo için scripti daha sonra tekrar çalıştır; "
+                      f"Kalan {left} senaryo için scripti daha sonra tekrar çalıştır (ya da --wait ekle); "
                       "kaldığı yerden devam eder.")
                 break
             except LLMError as e:
@@ -103,6 +118,7 @@ def main() -> int:
             append_record(results_path, r)
             records.append(r)
             print(line(r))
+            n += 1
 
     if not records:
         print("Henüz sonuç yok.")

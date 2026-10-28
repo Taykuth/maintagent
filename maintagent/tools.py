@@ -294,8 +294,8 @@ TOOL_SCHEMAS = [
          "component": {"type": "string", "enum": COMPS},
          "reason": {"type": "string", "description": "Sayılarla gerekçe: risk, sensör sapması, hata kodları"},
          "steps": {"type": "array", "items": {"type": "string"}, "description": "Kılavuzdaki adımlar"},
-         "parts": {"type": "array", "items": {"type": "string"}},
-         "estimated_hours": {"type": "number"},
+         "parts": {"type": "array", "items": {"type": "string"}, "description": "İsteğe bağlı; bilinmiyorsa gönderme"},
+         "estimated_hours": {"type": "number", "description": "Kılavuzdaki toplam süre; bilinmiyorsa gönderme"},
          "manual_section": {"type": "string", "description": "Adımların alındığı kılavuz bölümü"}},
         ["machine_id", "component", "reason", "steps"]),
 ]

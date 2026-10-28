@@ -4,7 +4,7 @@ import pytest
 from conftest import AS_OF, ScriptedLLM, answer, call
 
 from maintagent import config
-from maintagent.agent import RateLimited, run_agent
+from maintagent.agent import RateLimited, ToolCallRejected, run_agent
 from maintagent.manual import ManualSearch, load_chunks
 from maintagent.tools import TOOL_SCHEMAS, Toolbox, describe_feature
 from maintagent.work_orders import WorkOrderStore
@@ -218,6 +218,16 @@ def test_draft_text_written_by_llm_is_not_evidence(toolbox):
     events = []
     run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=0)
     assert [e["sayilar"] for e in events if e["type"] == "revise"] == [[8765.0]]
+
+
+def test_rejected_tool_call_goes_back_to_the_model(toolbox):
+    """Groq şemaya uymayan çağrıyı 400 ile reddederse program durmaz; model hatayı görüp tekrar dener."""
+    llm = ScriptedLLM([ToolCallRejected("`/estimated_hours`: expected number, but got null"),
+                       call("rank_machines_by_risk", top_n=3), answer("Liste.")])
+    events = []
+    res = run_agent("?", toolbox, llm, on_event=events.append, verify_answer=False)
+    assert res.answer == "Liste." and [e["type"] for e in events][0] == "tool_error"
+    assert "null" in llm.seen[1][-1]["content"] and llm.seen[1][-1]["role"] == "user"
 
 
 def test_agent_waits_when_rate_limited(toolbox):

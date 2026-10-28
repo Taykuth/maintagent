@@ -63,6 +63,7 @@ export type AgentEvent =
   | { type: "tool_result"; tool: string; arguments: string; result: Record<string, unknown>; ms: number }
   | { type: "nudge"; missing: Record<string, string[]> }
   | { type: "waiting"; seconds: number }
+  | { type: "tool_error"; message: string }
   | { type: "revise"; sayilar?: number[]; birimler?: string[]; eksik_bolumler?: string[] }
   | { type: "answer"; content: string; tokens: number; seconds: number; stopped_early: boolean }
   | { type: "error"; message: string };
