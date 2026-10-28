@@ -1,5 +1,7 @@
 # MaintAgent
 
+[![tests](https://github.com/Taykuth/maintagent/actions/workflows/tests.yml/badge.svg)](https://github.com/Taykuth/maintagent/actions/workflows/tests.yml)
+
 A maintenance assistant for a fleet of 100 industrial machines. A gradient-boosted model predicts which component will fail in the next 24 hours. An LLM agent then pulls the evidence with tools, looks up the repair procedure in a maintenance manual, and drafts a work order. The draft does nothing until a person approves it.
 
 ![Dashboard: fleet ranked by risk, sensor trends for the selected machine, agent panel](docs/dashboard.png)
@@ -160,5 +162,6 @@ tests/           pytest suite
 ## Contact
 
 Bora Taykut Hindal
+- LinkedIn: [borataykuthindal](https://www.linkedin.com/in/borataykuthindal)
 - GitHub: [Taykuth](https://github.com/Taykuth)
 - Email: btaykuthindal@gmail.com
