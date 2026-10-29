@@ -105,3 +105,27 @@ def test_api_enforces_live_quota(client):
     other_ip = client.post("/api/ask", json={"question": "?"}, headers={"x-forwarded-for": "10.0.0.9, 1.2.3.4"})
     assert other_ip.status_code == 200
     assert client.get("/api/health").json()["live_left_today"] == 8
+
+
+def test_static_export_writes_what_the_api_serves(synthetic_env, tmp_path):
+    from maintagent.static_export import export_static
+
+    con, model_dir = synthetic_env
+    state = AppState(con=con, model_dir=model_dir, as_of=AS_OF,
+                     manual=ManualSearch(load_chunks(config.MANUAL_PATH), "bm25"),
+                     orders=WorkOrderStore(tmp_path / "orders.sqlite"), make_llm=lambda: ScriptedLLM([]),
+                     llm_name="sahte", manual_method="bm25", quota=LiveQuota(per_day=10), examples=[EXAMPLE])
+    out = tmp_path / "demo"
+    (out / "eski.json").parent.mkdir(parents=True)
+    (out / "eski.json").write_text("{}")
+    summary = export_static(state, out)
+
+    read = lambda p: json.loads((out / p).read_text(encoding="utf-8"))  # noqa: E731
+    machines = read("machines.json")
+    assert summary["machines"] == len(machines) > 0 and summary["examples"] == 1
+    assert read("health.json")["live_left_today"] is None   # statik demoda canlı soru yok
+    first = machines[0]["machine_id"]
+    assert read(f"machines/{first}.json")["makine"]["id"] == first
+    assert read(f"telemetry/{first}.json")["points"]
+    assert read("examples.json")[0]["events"][-1]["type"] == "answer"
+    assert not (out / "eski.json").exists()                  # önceki dışa aktarımdan kalan dosya silinir

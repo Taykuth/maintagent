@@ -1,6 +1,11 @@
 // Backend (FastAPI) ile konuşan tek dosya. Tipler maintagent/api.py ve tools.py çıktılarıyla aynı.
+// NEXT_PUBLIC_DEMO_MODE=static ise sunucu yoktur: veriler public/demo altındaki dosyalardan gelir (lib/staticDemo.ts).
+
+import { demoExamples, DemoError, demoGet, demoOrders, replayLocal } from "./staticDemo";
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+export const STATIC_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "static";
+export const REPO_URL = "https://github.com/Taykuth/maintagent";
 
 export type Health = {
   ok: boolean;
@@ -106,7 +111,7 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-export const api = {
+const liveApi = {
   health: () => request<Health>("/api/health"),
   examples: () => request<Example[]>("/api/examples"),
   machines: () => request<Machine[]>("/api/machines"),
@@ -118,13 +123,38 @@ export const api = {
   reject: (id: number, note: string) => request<WorkOrder>(`/api/work-orders/${id}/reject`, json({ note })),
 };
 
+// Statik demoda hatalar da ApiError olarak çıkar; bileşenler farkı bilmez.
+async function demo<T>(fn: () => T | Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw e instanceof DemoError ? new ApiError(e.message, e.status) : e;
+  }
+}
+
+const staticApi: typeof liveApi = {
+  health: () => demo(() => demoGet<Health>("health.json")),
+  examples: () => demo(async () => (await demoExamples()).map(({ id, question }) => ({ id, question }))),
+  machines: () => demo(() => demoGet<Machine[]>("machines.json")),
+  machine: (id) => demo(() => demoGet<MachineReport>(`machines/${id}.json`)),
+  // Dışa aktarılan grafik verisi arayüzün istediği aralığı kapsar (static_export.py → TELEMETRY_HOURS)
+  telemetry: (id) => demo(() => demoGet<Telemetry>(`telemetry/${id}.json`)),
+  workOrders: (status) => demo(() => demoOrders.list(status)),
+  approve: (id, note) => demo(() => demoOrders.decide(id, true, note)),
+  reject: (id, note) => demo(() => demoOrders.decide(id, false, note)),
+};
+
+export const api = STATIC_DEMO ? staticApi : liveApi;
+
 /** Ajana canlı soru sorar; sunucunun gönderdiği her olayı (SSE) geldiği anda onEvent'e verir. */
 export function askAgent(question: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
+  if (STATIC_DEMO) return Promise.reject(new ApiError("Bu yayında canlı soru yok; kayıtlı çalıştırmaları izleyebilirsin."));
   return streamEvents("/api/ask", { question }, onEvent, signal);
 }
 
 /** Kayıtlı bir çalıştırmayı oynatır. Token harcamaz, canlı soru hakkından düşmez. */
 export function replayExample(id: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
+  if (STATIC_DEMO) return demo(() => replayLocal(id, onEvent, signal));
   return streamEvents(`/api/examples/${encodeURIComponent(id)}/replay`, {}, onEvent, signal);
 }
 

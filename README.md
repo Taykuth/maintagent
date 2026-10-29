@@ -110,7 +110,7 @@ flowchart TD
 - **The LLM proposes, code and people decide.** Work order priority comes from the manual's rule (80% or more is urgent, 50-80% high), the agent has no approve tool, and a second draft for the same machine and component returns the open one.
 - **Mistakes go back to the model; bugs do not.** An unknown tool, malformed arguments or an unknown machine return an error message the model can act on. Other exceptions are not sent to the model: the API logs them and shows a generic error, so real bugs are not hidden. Tool names are checked against a list, so the model cannot call internal methods such as the SQL helper.
 - **The manual is fictional but tied to the data.** The dataset does not say what comp1-4 are, so names and procedures are invented. The symptoms are not: before each failure type one sensor drifts (comp1 voltage +11%, comp2 rotation -17%, comp3 pressure +23%, comp4 vibration +24%) with its own error code, computed from all 761 failures.
-- **A public demo on a free quota.** Live questions are limited per IP per hour and per day, so one visitor cannot use up the day's tokens. The suggested questions replay recorded real runs instantly; the panel says when a run is a recording.
+- **The public demo needs no server.** The app's "now" is a fixed moment in the dataset, so the fleet, the reports and the charts never change. `scripts/export_static.py` saves the API's own responses as JSON and the dashboard reads them, so the demo is free, never sleeps and opens at once. The agent side replays recorded real runs (`scripts/record_examples.py`), marked as recordings in the panel; work order approval runs in the browser. Asking new questions needs the local setup below. The same API can also run live behind a per-IP and per-day question limit (see Deploy).
 - **Dashboard colour follows control-room practice (ISA-101).** Normal is grey, colour is kept for abnormal states, so the three failing machines stand out among a hundred.
 
 ## Limitations
@@ -141,6 +141,7 @@ python scripts/ask.py "Makine 20 neden riskli, ne yapmalıyım?"
 python scripts/eval_retrieval.py   # manual search comparison above
 python scripts/eval_agent.py       # agent evaluation (resumes where it stopped)
 python scripts/record_examples.py  # record the demo runs replayed by the suggested questions
+python scripts/export_static.py    # write the static demo data to frontend/public/demo
 uvicorn maintagent.api:create_app --factory --reload   # API on :8000, docs at /docs
 ```
 
@@ -152,13 +153,13 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
-Tests: `pytest` runs 86 tests on generated data with the same schema, so no Kaggle download or API key is needed.
+Tests: `pytest` runs 87 tests on generated data with the same schema, so no Kaggle download or API key is needed.
 
 ## Deploy
 
-- **API:** a Docker Space on Hugging Face. Upload `deploy/huggingface/Dockerfile` and `deploy/huggingface/README.md` to a new Docker Space; the build clones this repository. On start, `deploy/start.sh` downloads the dataset from Kaggle (it is not stored in the image) and builds the database.
-  Secrets: `GROQ_API_KEY`, `KAGGLE_API_TOKEN` (or the legacy `KAGGLE_USERNAME` + `KAGGLE_KEY`). Variables: `CORS_ORIGINS` (the dashboard URL), `LIVE_PER_IP_PER_HOUR`, `LIVE_PER_DAY`.
-- **Dashboard:** Vercel, root directory `frontend`, with `NEXT_PUBLIC_API_URL` set to the Space URL.
+- **Public demo (static, free):** Vercel, root directory `frontend`, environment variable `NEXT_PUBLIC_DEMO_MODE=static`. It serves the files written by `scripts/export_static.py`; no API is needed.
+- **Live API (optional):** a Docker Space on Hugging Face. Upload `deploy/huggingface/Dockerfile` and `deploy/huggingface/README.md` to a new Docker Space; the build clones this repository. On start, `deploy/start.sh` downloads the dataset from Kaggle (it is not stored in the image) and builds the database.
+  Secrets: `GROQ_API_KEY`, `KAGGLE_API_TOKEN` (or the legacy `KAGGLE_USERNAME` + `KAGGLE_KEY`). Variables: `CORS_ORIGINS` (the dashboard URL), `LIVE_PER_IP_PER_HOUR`, `LIVE_PER_DAY`. The dashboard then gets `NEXT_PUBLIC_API_URL` set to the Space URL instead of the static mode. At the time of writing, a new free Hugging Face account could not start a Docker Space (CPU quota limit), which is why the public demo is static.
 
 ## Project layout
 
@@ -167,8 +168,8 @@ maintagent/      data loading, features, model, tools, agent loop, checks, API, 
 scripts/         command-line entry points (load, train, ablation, ask, evaluations)
 data/manual/     maintenance manual and search test questions
 data/eval/       agent scenarios and results
-frontend/        Next.js dashboard
-deploy/          Hugging Face Space files and start script
+frontend/        Next.js dashboard (public/demo: static demo data)
+deploy/          Docker Space files and start script
 tests/           pytest suite
 ```
 

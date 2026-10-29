@@ -3,7 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
-import { api, askAgent, type AgentEvent, ApiError, type Example, replayExample, type WorkOrder } from "@/lib/api";
+import {
+  api,
+  askAgent,
+  type AgentEvent,
+  ApiError,
+  type Example,
+  REPO_URL,
+  replayExample,
+  STATIC_DEMO,
+  type WorkOrder,
+} from "@/lib/api";
 import { dayTime, fmt } from "@/lib/format";
 import { LevelIcon } from "./RiskBadge";
 import { WorkOrderCard } from "./WorkOrderCard";
@@ -81,12 +91,13 @@ type Props = {
   liveLeft: number | null; // bugün kalan canlı soru; null: sınır yok
   onOrdersChanged: () => void;
   onLiveRunFinished: () => void;
+  onSelectMachine?: (id: number) => void; // kayıt bir makine hakkındaysa ortadaki görünüm o makineye geçer
 };
 
 // "Makine 20 ..." sorusunun makine numarası; filo soruları için null
 const machineOf = (q: string) => Number(/Makine (\d+)/.exec(q)?.[1] ?? NaN) || null;
 
-export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLiveRunFinished }: Props) {
+export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLiveRunFinished, onSelectMachine }: Props) {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
@@ -193,13 +204,18 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
   }
 
   function play(ex: Example) {
+    const m = machineOf(ex.question);
+    if (m !== null) onSelectMachine?.(m);
     start(ex.question, (signal) => replayExample(ex.id, handle, signal), false);
   }
 
   // Öneriler: seçili makinenin ve filonun kayıtlı örnekleri anında oynatılır; kaydı olmayan makine için canlı soru.
-  const recorded = examples.filter((ex) => machineOf(ex.question) === null || machineOf(ex.question) === machineId);
+  // Statik demoda canlı soru yok; bütün kayıtlar gösterilir, seçili makineninki başta.
+  const recorded = STATIC_DEMO
+    ? [...examples].sort((a, b) => Number(machineOf(b.question) === machineId) - Number(machineOf(a.question) === machineId))
+    : examples.filter((ex) => machineOf(ex.question) === null || machineOf(ex.question) === machineId);
   const live =
-    machineId != null && !recorded.some((ex) => machineOf(ex.question) === machineId)
+    !STATIC_DEMO && machineId != null && !recorded.some((ex) => machineOf(ex.question) === machineId)
       ? [`Makine ${machineId} neden riskli, ne yapmalıyım?`]
       : [];
   const outOfLive = liveLeft === 0;
@@ -221,6 +237,12 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
               Ajan makinenin verisine ve bakım kılavuzuna bakarak cevap verir. Risk yüksekse iş emri taslağı hazırlar;
               taslak senin onayın olmadan uygulanmaz.
             </p>
+            {STATIC_DEMO && (
+              <p className="mt-3 max-w-[40ch]">
+                Bu demoda ajanın gerçek çalıştırmalarının kayıtları oynatılır. Aşağıdan bir soru seç; çıkan iş emri
+                taslağını onaylayabilir ya da reddedebilirsin.
+              </p>
+            )}
           </div>
         )}
 
@@ -316,45 +338,58 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
             </button>
           ))}
         </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            ask(question);
-          }}
-          className="flex items-end gap-2"
-        >
-          <label htmlFor="agent-question" className="sr-only">
-            Ajana soru
-          </label>
-          <textarea
-            id="agent-question"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+        {STATIC_DEMO ? (
+          <p className="text-xs text-ink-3">
+            Bu yayında canlı soru yok (ücretsiz yayın, LLM kotası ayrılmadı). Kendi sorunu sormak için projeyi
+            yerelde çalıştır:{" "}
+            <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-ink-2 underline hover:text-ink">
+              GitHub
+            </a>
+            .
+          </p>
+        ) : (
+          <>
+            <form
+              onSubmit={(e) => {
                 e.preventDefault();
                 ask(question);
-              }
-            }}
-            rows={2}
-            maxLength={500}
-            placeholder="Bir makine hakkında sor"
-            className="min-h-[44px] flex-1 resize-none rounded-md border border-line bg-page px-3 py-2 text-sm placeholder:text-ink-3"
-          />
-          <button
-            type="submit"
-            disabled={running || !question.trim() || outOfLive}
-            className="h-[44px] rounded-md bg-ink px-4 font-semibold text-page hover:bg-white disabled:opacity-40"
-          >
-            {running ? "Çalışıyor" : "Sor"}
-          </button>
-        </form>
-        {liveLeft !== null && (
-          <p className="mt-2 text-xs text-ink-3">
-            {outOfLive
-              ? "Bugünkü canlı soru hakkı doldu; kayıtlı örnekleri izleyebilirsin."
-              : `Bugün kalan canlı soru: ${liveLeft}. Kayıtlı örnekler bu hakkı kullanmaz.`}
-          </p>
+              }}
+              className="flex items-end gap-2"
+            >
+              <label htmlFor="agent-question" className="sr-only">
+                Ajana soru
+              </label>
+              <textarea
+                id="agent-question"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    ask(question);
+                  }
+                }}
+                rows={2}
+                maxLength={500}
+                placeholder="Bir makine hakkında sor"
+                className="min-h-[44px] flex-1 resize-none rounded-md border border-line bg-page px-3 py-2 text-sm placeholder:text-ink-3"
+              />
+              <button
+                type="submit"
+                disabled={running || !question.trim() || outOfLive}
+                className="h-[44px] rounded-md bg-ink px-4 font-semibold text-page hover:bg-white disabled:opacity-40"
+              >
+                {running ? "Çalışıyor" : "Sor"}
+              </button>
+            </form>
+            {liveLeft !== null && (
+              <p className="mt-2 text-xs text-ink-3">
+                {outOfLive
+                  ? "Bugünkü canlı soru hakkı doldu; kayıtlı örnekleri izleyebilirsin."
+                  : `Bugün kalan canlı soru: ${liveLeft}. Kayıtlı örnekler bu hakkı kullanmaz.`}
+              </p>
+            )}
+          </>
         )}
       </div>
     </section>

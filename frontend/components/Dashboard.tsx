@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, API_URL, ApiError, type Health, type Machine } from "@/lib/api";
+import { api, API_URL, ApiError, type Health, type Machine, REPO_URL, STATIC_DEMO } from "@/lib/api";
 import { fullDate, riskLevel } from "@/lib/format";
 import { AgentPanel } from "./AgentPanel";
 import { FleetList } from "./FleetList";
@@ -47,7 +47,7 @@ export function Dashboard() {
         <div className="max-w-lg space-y-3">
           <h1 className="font-cond text-2xl font-semibold">Veriye ulaşılamadı</h1>
           <p className="text-ink-2">{error}</p>
-          <p className="text-sm text-ink-3">Beklenen adres: {API_URL}</p>
+          {!STATIC_DEMO && <p className="text-sm text-ink-3">Beklenen adres: {API_URL}</p>}
           <button
             type="button"
             onClick={load}
@@ -95,6 +95,14 @@ export function Dashboard() {
           İş emirleri
           {pending > 0 && <span className="ml-2 rounded-full bg-ink px-1.5 text-xs font-semibold text-page">{pending}</span>}
         </button>
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm text-ink-2 underline-offset-4 hover:text-ink hover:underline"
+        >
+          Kaynak kod
+        </a>
       </header>
 
       <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_400px]">
@@ -111,6 +119,7 @@ export function Dashboard() {
             liveLeft={health.live_left_today}
             onOrdersChanged={refreshPending}
             onLiveRunFinished={() => api.health().then(setHealth).catch(() => {})}
+            onSelectMachine={setSelectedId}
           />
         </div>
       </main>
