@@ -16,6 +16,7 @@ Kullanım:
     python scripts/eval_agent.py --run v1 --summary
     python scripts/eval_agent.py --search bm25    # v1 ile aynı arama; sadece v2 değişiklikleri ölçülür
     python scripts/eval_agent.py --search bm25 --wait   # sınıra takılınca bekleyip kendiliğinden devam eder
+    python scripts/eval_agent.py --search bm25 --run v3 --types ariza   # sadece arıza senaryoları
 """
 
 import argparse
@@ -33,7 +34,7 @@ from maintagent import config  # noqa: E402
 from maintagent.agent import GroqLLM, LLMError, RateLimited  # noqa: E402
 from maintagent.evaluation import (append_record, load_records, make_scenarios, run_scenario,  # noqa: E402
                                    summarize, to_frame)
-from maintagent.manual import build_search, load_chunks  # noqa: E402
+from maintagent.manual import build_search, component_specs, load_chunks  # noqa: E402
 from maintagent.model import load  # noqa: E402
 
 EVAL_DIR = config.ROOT_DIR / "data" / "eval"
@@ -55,7 +56,7 @@ def line(r: dict) -> str:
 
 
 def write_summary(records: list[dict], path: Path, run: str, search: str) -> str:
-    table = summarize(records)
+    table = summarize(records, component_specs(load_chunks(config.MANUAL_PATH)))
     path.write_text(f"# Ajan değerlendirmesi ({run})\n\nLLM: `{config.GROQ_MODEL}` (akıl yürütme: "
                     f"`{config.GROQ_REASONING_EFFORT}`), kılavuz araması: `{search}`\n\n{table}\n",
                     encoding="utf-8")
@@ -67,6 +68,7 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Bu çalıştırmada en fazla kaç senaryo")
     ap.add_argument("--summary", action="store_true", help="Sadece kayıtlı sonuçların özetini yaz")
     ap.add_argument("--run", default="v2", help="Sonuç dosyalarının sürüm adı (varsayılan v2)")
+    ap.add_argument("--types", default="", help="Sadece bu senaryo türleri, virgülle: ariza,hatali_arizasiz,sakin")
     ap.add_argument("--wait", action="store_true",
                     help="Groq sınırına takılınca durma; söylenen süre kadar bekleyip devam et (bilgisayar açık kalmalı)")
     ap.add_argument("--search", default=config.MANUAL_SEARCH,
@@ -85,6 +87,8 @@ def main() -> int:
 
     records = load_records(results_path)
     done = {r["id"] for r in records}
+    if args.types:
+        scenarios = [s for s in scenarios if s["tur"] in args.types.split(",")]
     pending = [s for s in scenarios if s["id"] not in done]
 
     if not args.summary and pending:

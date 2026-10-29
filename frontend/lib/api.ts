@@ -8,7 +8,11 @@ export type Health = {
   llm: string;
   manual_search: string;
   draft_threshold: number;
+  live_left_today: number | null; // null: sınır yok
+  examples: number;
 };
+
+export type Example = { id: string; question: string };
 
 export type Machine = {
   machine_id: number;
@@ -62,6 +66,7 @@ export type AgentEvent =
   | { type: "tool_call"; tool: string; arguments: string }
   | { type: "tool_result"; tool: string; arguments: string; result: Record<string, unknown>; ms: number }
   | { type: "nudge"; missing: Record<string, string[]> }
+  | { type: "replay"; question: string; recorded_at: string; llm: string }
   | { type: "waiting"; seconds: number }
   | { type: "tool_error"; message: string }
   | { type: "revise"; sayilar?: number[]; birimler?: string[]; eksik_bolumler?: string[] }
@@ -103,6 +108,7 @@ const json = (body: unknown): RequestInit => ({
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  examples: () => request<Example[]>("/api/examples"),
   machines: () => request<Machine[]>("/api/machines"),
   machine: (id: number) => request<MachineReport>(`/api/machines/${id}`),
   telemetry: (id: number, hours = 168) => request<Telemetry>(`/api/machines/${id}/telemetry?hours=${hours}`),
@@ -112,11 +118,20 @@ export const api = {
   reject: (id: number, note: string) => request<WorkOrder>(`/api/work-orders/${id}/reject`, json({ note })),
 };
 
-/** Ajana soru sorar; sunucunun gönderdiği her olayı (SSE) geldiği anda onEvent'e verir. */
-export async function askAgent(question: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
+/** Ajana canlı soru sorar; sunucunun gönderdiği her olayı (SSE) geldiği anda onEvent'e verir. */
+export function askAgent(question: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
+  return streamEvents("/api/ask", { question }, onEvent, signal);
+}
+
+/** Kayıtlı bir çalıştırmayı oynatır. Token harcamaz, canlı soru hakkından düşmez. */
+export function replayExample(id: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
+  return streamEvents(`/api/examples/${encodeURIComponent(id)}/replay`, {}, onEvent, signal);
+}
+
+async function streamEvents(path: string, body: unknown, onEvent: (e: AgentEvent) => void, signal?: AbortSignal) {
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/api/ask`, { ...json({ question }), signal });
+    res = await fetch(`${API_URL}${path}`, { ...json(body), signal });
   } catch (e) {
     if ((e as Error).name === "AbortError") return;
     throw new ApiError(UNREACHABLE);

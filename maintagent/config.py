@@ -32,5 +32,12 @@ MANUAL_SEARCH = os.getenv("MANUAL_SEARCH", "hybrid")
 # İş emri taslakları ve onaylar (SQLite; git'e girmez)
 WORK_ORDERS_DB = Path(os.getenv("WORK_ORDERS_DB", ROOT_DIR / "data" / "work_orders.sqlite"))
 
+# Herkese açık demoda canlı soru sınırı (0 = sınırsız; yerelde varsayılan). Yayında ör. 5 ve 15.
+LIVE_PER_IP_PER_HOUR = int(os.getenv("LIVE_PER_IP_PER_HOUR", "0"))
+LIVE_PER_DAY = int(os.getenv("LIVE_PER_DAY", "0"))
+
+# Kayıtlı örnek çalıştırmalar (scripts/record_examples.py üretir)
+EXAMPLES_PATH = ROOT_DIR / "data" / "examples" / "examples.json"
+
 # API'yi çağırabilecek arayüz adresleri, virgülle ayrılmış
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]

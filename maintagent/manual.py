@@ -167,3 +167,26 @@ def build_search(chunks: list[Chunk], method: str) -> tuple[ManualSearch, str]:
         print(f"Uyarı: '{method}' araması için sentence-transformers kurulu değil; BM25 kullanılıyor. "
               "Kurmak için: pip install -r requirements-embed.txt")
         return ManualSearch(chunks, "bm25"), "bm25"
+
+
+SPEC_TITLE = re.compile(r"^(comp\d) — .+ › Süre, parça ve öncelik$")
+SPEC_HOURS = re.compile(r"Tahmini süre (\d+(?:[.,]\d+)?) saat, ([^.]+)\.")
+SPEC_PARTS = re.compile(r"Gerekli parça(?:lar)?: (.+?)\.(?:\s|$)")
+
+
+def component_specs(chunks: list[Chunk]) -> dict[str, dict]:
+    """Her bileşenin kılavuzdaki süresi, ekibi ve parçaları.
+
+    İş emri taslağındaki süre ve parçalar modelden değil buradan gelir. v2 değerlendirmesinde
+    model, kılavuz araması bu bölümü getirmediğinde 12 taslağın 2'sine uydurma süre ve parça yazdı.
+    """
+    specs = {}
+    for c in chunks:
+        title = SPEC_TITLE.match(c.title)
+        hours, parts = SPEC_HOURS.search(c.text), SPEC_PARTS.search(c.text)
+        if not (title and hours and parts):
+            continue
+        items = [p.strip() for p in re.split(r",| ve ", parts.group(1)) if p.strip()]
+        specs[title.group(1)] = {"saat": float(hours.group(1).replace(",", ".")), "ekip": hours.group(2).strip(),
+                                 "parcalar": items, "bolum": c.title}
+    return specs

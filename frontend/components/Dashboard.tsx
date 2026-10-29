@@ -105,7 +105,13 @@ export function Dashboard() {
           {selectedId != null && <MachineView machineId={selectedId} />}
         </div>
         <div className="flex min-h-[560px] flex-col border-t border-line bg-panel lg:min-h-0 lg:border-t-0 lg:border-l">
-          <AgentPanel machineId={selectedId} llmName={health.llm} onOrdersChanged={refreshPending} />
+          <AgentPanel
+            machineId={selectedId}
+            llmName={health.llm}
+            liveLeft={health.live_left_today}
+            onOrdersChanged={refreshPending}
+            onLiveRunFinished={() => api.health().then(setHealth).catch(() => {})}
+          />
         </div>
       </main>
 

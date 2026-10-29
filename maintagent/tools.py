@@ -14,7 +14,7 @@ import duckdb
 import pandas as pd
 
 from maintagent.features import COMPS, SENSORS, features_at
-from maintagent.manual import ManualSearch
+from maintagent.manual import ManualSearch, component_specs
 from maintagent.model import load, predict, top_factors
 from maintagent.work_orders import WorkOrderStore
 
@@ -210,11 +210,12 @@ class Toolbox:
         }
 
     def draft_work_order(self, machine_id: int, component: str, reason: str, steps: list[str],
-                         parts: list[str] | None = None, estimated_hours: float | None = None,
-                         manual_section: str | None = None) -> dict:
+                         manual_section: str | None = None, **ignored) -> dict:
         """Bakım şefinin onayına sunulacak iş emri taslağı oluşturur. Onaylamaz.
 
-        Öncelik LLM'den alınmaz; modelin riskinden kılavuz kuralıyla hesaplanır.
+        Model sadece gerekçeyi ve adımları yazar. Öncelik modelin riskinden kılavuz kuralıyla,
+        süre ve parçalar kılavuzun "Süre, parça ve öncelik" bölümünden kodla belirlenir.
+        Model yine de süre ya da parça gönderirse (ignored) dikkate alınmaz.
         """
         if self.orders is None:
             raise RuntimeError("İş emri kaydı yapılandırılmadı.")
@@ -230,12 +231,20 @@ class Toolbox:
         if existing:
             return {"is_emri": existing, "not": "Bu makine ve bileşen için onay bekleyen bir taslak zaten var; yenisi açılmadı."}
         risk = self.predict_failure_risk(machine_id)["ariza_riski_24_saat_yuzde"]
+        spec = self._specs().get(component, {})
         order = self.orders.create(
             machine_id=machine_id, component=component, risk_pct=risk, reason=reason.strip(),
-            steps=[s.strip() for s in steps], parts=[str(p) for p in (parts or [])],
-            estimated_hours=float(estimated_hours) if estimated_hours is not None else None,
-            manual_section=manual_section)
-        return {"is_emri": order, "not": "Taslak oluşturuldu ve bakım şefinin onayını bekliyor."}
+            steps=[s.strip() for s in steps], parts=spec.get("parcalar", []),
+            estimated_hours=spec.get("saat"), manual_section=manual_section or spec.get("bolum"))
+        note = "Taslak oluşturuldu ve bakım şefinin onayını bekliyor."
+        if spec:
+            note += f" Süre ({spec['saat']:g} saat, {spec['ekip']}) ve parçalar kılavuzdan eklendi."
+        return {"is_emri": order, "not": note}
+
+    def _specs(self) -> dict[str, dict]:
+        if not hasattr(self, "_spec_cache"):
+            self._spec_cache = component_specs(self.manual.chunks) if self.manual else {}
+        return self._spec_cache
 
     # --- arayüz için (ajan aracı değil) --------------------------------------
 
@@ -289,13 +298,11 @@ TOOL_SCHEMAS = [
         {"query": {"type": "string", "description": "ör. 'ana mil rulmanı kontrol adımları'"},
          "k": {"type": "integer", "description": "1-5, varsayılan 3"}}, ["query"]),
     _fn("draft_work_order",
-        "Bakım şefinin onayına iş emri taslağı oluşturur. Öncelik riske göre otomatik belirlenir. Onaylamaz.",
+        "Bakım şefinin onayına iş emri taslağı oluşturur. Öncelik, süre ve parçalar otomatik eklenir. Onaylamaz.",
         {**MACHINE,
          "component": {"type": "string", "enum": COMPS},
          "reason": {"type": "string", "description": "Sayılarla gerekçe: risk, sensör sapması, hata kodları"},
          "steps": {"type": "array", "items": {"type": "string"}, "description": "Kılavuzdaki adımlar"},
-         "parts": {"type": "array", "items": {"type": "string"}, "description": "İsteğe bağlı; bilinmiyorsa gönderme"},
-         "estimated_hours": {"type": "number", "description": "Kılavuzdaki toplam süre; bilinmiyorsa gönderme"},
          "manual_section": {"type": "string", "description": "Adımların alındığı kılavuz bölümü"}},
         ["machine_id", "component", "reason", "steps"]),
 ]

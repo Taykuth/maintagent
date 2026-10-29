@@ -110,6 +110,14 @@ def test_draft_work_order_sets_priority_from_risk(toolbox):
     assert order["steps"] == ["Kilitle", "Rulmanı değiştir"]
 
 
+def test_draft_takes_duration_and_parts_from_the_manual(toolbox):
+    """Model süre ya da parça gönderse de taslağa kılavuzdaki değerler yazılır."""
+    order = draft(toolbox, estimated_hours=99, parts=["uydurma parça"])["is_emri"]
+    assert order["estimated_hours"] == 4.0
+    assert order["parts"] == ["ana mil rulman seti (stok kodu RL-02)", "rulman gresi"]
+    assert order["manual_section"] is None or "comp2" in order["manual_section"]
+
+
 def test_second_draft_for_same_machine_returns_existing(toolbox):
     first = draft(toolbox)["is_emri"]
     second = draft(toolbox, reason="Başka gerekçe")

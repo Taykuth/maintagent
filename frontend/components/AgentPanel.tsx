@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
-import { askAgent, type AgentEvent, ApiError, type WorkOrder } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { api, askAgent, type AgentEvent, ApiError, type Example, replayExample, type WorkOrder } from "@/lib/api";
+import { dayTime, fmt } from "@/lib/format";
 import { LevelIcon } from "./RiskBadge";
 import { WorkOrderCard } from "./WorkOrderCard";
 
@@ -16,6 +16,7 @@ type Step =
   | { kind: "revise"; numbers: number[]; units: string[]; sections: string[] }
   | { kind: "error"; message: string };
 
+type Replay = Extract<AgentEvent, { type: "replay" }>;
 type Answer = Extract<AgentEvent, { type: "answer" }>;
 
 const TOOL_NAMES: Record<string, string> = {
@@ -74,15 +75,26 @@ function resultLine(tool: string, r: Record<string, unknown>): string {
   return "Tamamlandı";
 }
 
-type Props = { machineId: number | null; llmName: string; onOrdersChanged: () => void };
+type Props = {
+  machineId: number | null;
+  llmName: string;
+  liveLeft: number | null; // bugün kalan canlı soru; null: sınır yok
+  onOrdersChanged: () => void;
+  onLiveRunFinished: () => void;
+};
 
-export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
+// "Makine 20 ..." sorusunun makine numarası; filo soruları için null
+const machineOf = (q: string) => Number(/Makine (\d+)/.exec(q)?.[1] ?? NaN) || null;
+
+export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLiveRunFinished }: Props) {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [running, setRunning] = useState(false);
+  const [replay, setReplay] = useState<Replay | null>(null);
+  const [examples, setExamples] = useState<Example[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -92,6 +104,10 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
     const el = scrollRef.current;
     if (el && asked) el.scrollTop = el.scrollHeight;
   }, [steps, answer, orders, asked]);
+
+  useEffect(() => {
+    api.examples().then(setExamples).catch(() => setExamples([]));
+  }, []);
 
   // Panel kapanırsa (sayfa değişirse) süren isteği iptal et.
   useEffect(() => {
@@ -136,6 +152,9 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
           { kind: "revise", numbers: e.sayilar ?? [], units: e.birimler ?? [], sections: e.eksik_bolumler ?? [] },
         ]);
         break;
+      case "replay":
+        setReplay(e);
+        break;
       case "answer":
         setAnswer(e);
         break;
@@ -145,33 +164,45 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
     }
   }
 
-  async function run(q: string) {
-    const text = q.trim();
-    if (!text || running) return;
+  async function start(text: string, go: (signal: AbortSignal) => Promise<void>, live: boolean) {
+    if (running) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setAsked(text);
-    setQuestion("");
     setSteps([]);
     setAnswer(null);
     setOrders([]);
+    setReplay(null);
     setRunning(true);
     try {
-      await askAgent(text, handle, controller.signal);
+      await go(controller.signal);
     } catch (e) {
       handle({ type: "error", message: (e as ApiError).message });
     } finally {
       setRunning(false);
+      if (live) onLiveRunFinished();
     }
   }
 
-  const suggestions = [
-    ...(machineId != null
-      ? [`Makine ${machineId} neden riskli, ne yapmalıyım?`, `Makine ${machineId} son 30 günde hangi hataları verdi?`]
-      : []),
-    "Şu an en riskli 3 makine hangileri?",
-  ];
+  function ask(q: string) {
+    const text = q.trim();
+    if (!text) return;
+    setQuestion("");
+    start(text, (signal) => askAgent(text, handle, signal), true);
+  }
+
+  function play(ex: Example) {
+    start(ex.question, (signal) => replayExample(ex.id, handle, signal), false);
+  }
+
+  // Öneriler: seçili makinenin ve filonun kayıtlı örnekleri anında oynatılır; kaydı olmayan makine için canlı soru.
+  const recorded = examples.filter((ex) => machineOf(ex.question) === null || machineOf(ex.question) === machineId);
+  const live =
+    machineId != null && !recorded.some((ex) => machineOf(ex.question) === machineId)
+      ? [`Makine ${machineId} neden riskli, ne yapmalıyım?`]
+      : [];
+  const outOfLive = liveLeft === 0;
   const toolCount = steps.filter((s) => s.kind === "tool").length;
 
   return (
@@ -197,6 +228,13 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
           <p className="mb-4 rounded-md bg-raised px-3 py-2 text-sm">
             <span className="text-ink-3">Soru: </span>
             {asked}
+          </p>
+        )}
+
+        {replay && (
+          <p className="mb-4 rounded-md border border-line px-3 py-2 text-xs text-ink-2">
+            Kayıtlı çalıştırma: {dayTime(replay.recorded_at.replace("T", " "))} tarihinde {replay.llm} ile yapılmış
+            gerçek bir çalıştırmanın kaydı. Canlı değil; adımlar arası beklemeler kısaltıldı.
           </p>
         )}
 
@@ -253,22 +291,35 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
 
       <div className="border-t border-line p-4">
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {suggestions.map((s) => (
+          {recorded.map((ex) => (
             <button
-              key={s}
+              key={ex.id}
               type="button"
               disabled={running}
-              onClick={() => run(s)}
+              onClick={() => play(ex)}
+              title="Gerçek bir çalıştırmanın kaydı; anında oynatılır"
               className="rounded-full border border-line px-2.5 py-1 text-left text-xs text-ink-2 hover:border-line-strong hover:text-ink disabled:opacity-40"
             >
-              {s}
+              {ex.question}
+              <span className="ml-1.5 rounded bg-raised px-1 py-px text-[10px] text-ink-3">kayıt</span>
+            </button>
+          ))}
+          {live.map((q) => (
+            <button
+              key={q}
+              type="button"
+              disabled={running || outOfLive}
+              onClick={() => ask(q)}
+              className="rounded-full border border-line px-2.5 py-1 text-left text-xs text-ink-2 hover:border-line-strong hover:text-ink disabled:opacity-40"
+            >
+              {q}
             </button>
           ))}
         </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            run(question);
+            ask(question);
           }}
           className="flex items-end gap-2"
         >
@@ -282,7 +333,7 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                run(question);
+                ask(question);
               }
             }}
             rows={2}
@@ -292,12 +343,19 @@ export function AgentPanel({ machineId, llmName, onOrdersChanged }: Props) {
           />
           <button
             type="submit"
-            disabled={running || !question.trim()}
+            disabled={running || !question.trim() || outOfLive}
             className="h-[44px] rounded-md bg-ink px-4 font-semibold text-page hover:bg-white disabled:opacity-40"
           >
             {running ? "Çalışıyor" : "Sor"}
           </button>
         </form>
+        {liveLeft !== null && (
+          <p className="mt-2 text-xs text-ink-3">
+            {outOfLive
+              ? "Bugünkü canlı soru hakkı doldu; kayıtlı örnekleri izleyebilirsin."
+              : `Bugün kalan canlı soru: ${liveLeft}. Kayıtlı örnekler bu hakkı kullanmaz.`}
+          </p>
+        )}
       </div>
     </section>
   );

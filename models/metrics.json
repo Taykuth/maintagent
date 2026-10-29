@@ -1,0 +1,52 @@
+{
+  "features": [
+    "volt_mean_3h",
+    "volt_std_3h",
+    "volt_mean_24h",
+    "volt_std_24h",
+    "rotate_mean_3h",
+    "rotate_std_3h",
+    "rotate_mean_24h",
+    "rotate_std_24h",
+    "pressure_mean_3h",
+    "pressure_std_3h",
+    "pressure_mean_24h",
+    "pressure_std_24h",
+    "vibration_mean_3h",
+    "vibration_std_3h",
+    "vibration_mean_24h",
+    "vibration_std_24h",
+    "error1_24h",
+    "error2_24h",
+    "error3_24h",
+    "error4_24h",
+    "error5_24h",
+    "comp1_days",
+    "comp2_days",
+    "comp3_days",
+    "comp4_days",
+    "age",
+    "is_model1",
+    "is_model2",
+    "is_model3",
+    "is_model4"
+  ],
+  "train": [
+    "2015-01-02 00:00:00",
+    "2015-08-01 00:00:00"
+  ],
+  "test": [
+    "2015-08-02 00:00:00",
+    "2015-12-31 00:00:00"
+  ],
+  "synthetic": false,
+  "metrics": {
+    "test_samples": 120900,
+    "test_positive_rate": 0.0186,
+    "pr_auc_model": 0.999,
+    "pr_auc_rule_baseline": 0.226,
+    "recall_at_80pct_precision_model": 1.0,
+    "recall_at_80pct_precision_rule": 0.003,
+    "component_accuracy_on_failures": 0.977
+  }
+}

@@ -43,9 +43,9 @@ SYSTEM_PROMPT = """Fabrika bakım mühendislerine yardım eden asistansın. Şu 
 Kurallar:
 - Her sayıyı araç çıktısından al; uydurma, hesaplama yapma.
 - Bir makine sorulursa önce get_machine_report çağır.
-- Risk %{threshold:.0f} veya üstündeyse: search_manual ile en olası bileşenin kontrol adımlarına, süresine ve
-  parçalarına bak, sonra draft_work_order ile iş emri taslağı oluştur. Taslak bakım şefinin onayını bekler:
-  "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
+- Risk %{threshold:.0f} veya üstündeyse: search_manual ile en olası bileşenin kontrol adımlarına bak, sonra
+  draft_work_order ile iş emri taslağı oluştur. Süre ve parçaları taslak sonucundan al. Taslak bakım şefinin
+  onayını bekler: "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
 - Risk %{threshold:.0f}'nin altındaysa iş emri ve bakım prosedürü önerme; "acil işlem gerekmiyor, planlı bakıma
   devam" de. Belirgin sapan sensör varsa izlenmesini öner.
 - Süre olarak sadece kılavuzdaki toplam süreyi yaz; adım başına süre yazma.
@@ -58,8 +58,9 @@ Biçim:
 **Kanıt:** 3-5 madde, sayılarla.
 **Öneri:** yapılacaklar; risk yüksekse kılavuzdaki adımlar, toplam süre, parça, kaynak bölüm ve taslak numarası."""
 
-# Taslağın bu alanlarını LLM yazdı; sayı kontrolünde kanıt sayılmaz (yoksa uydurma süre kendini doğrular).
-LLM_WRITTEN_FIELDS = {"reason", "steps", "parts", "estimated_hours", "manual_section", "note", "created_at"}
+# Taslağın bu alanlarını LLM yazdı; sayı kontrolünde kanıt sayılmaz (yoksa uydurma bir sayı kendini doğrular).
+# Süre ve parçalar kodla kılavuzdan geldiği için kanıttır.
+LLM_WRITTEN_FIELDS = {"reason", "steps", "manual_section", "note", "created_at"}
 
 
 class LLMError(Exception):

@@ -7,8 +7,8 @@ import pytest
 from conftest import ScriptedLLM, answer, call
 
 from maintagent import config
-from maintagent.evaluation import (append_record, load_records, make_scenarios, predicted_component, run_scenario,
-                                   summarize)
+from maintagent.evaluation import (append_record, draft_checks, load_records, make_scenarios, predicted_component,
+                                   run_scenario, summarize)
 from maintagent.grounding import invented_units, is_grounded, numbers_in_text, ungrounded_numbers
 from maintagent.manual import ManualSearch, load_chunks
 
@@ -106,3 +106,24 @@ def test_summary_and_records_roundtrip(tmp_path):
     assert "| Yanlış alarm: hatalı-arızasız | 1/1 (%100) |" in table
     assert "| Uydurma birim içeren cevap (son hâli) | 2/2 (%100) |" in table
     json.dumps(records)  # kayıtlar JSON'a çevrilebilir olmalı
+
+
+SPECS = {"comp3": {"saat": 3.0, "parcalar": ["valf bloğu (stok kodu HV-03)", "conta seti", "hidrolik filtre"]}}
+
+
+def draft_step(**order):
+    return [{"tool": "draft_work_order", "result": {"is_emri": {"component": "comp3", **order}}}]
+
+
+@pytest.mark.parametrize("order, expected", [
+    ({"estimated_hours": 3.0, "parts": ["HV-03", "conta seti"]}, (True, True)),
+    ({"estimated_hours": 2.0, "parts": ["hidrolik filtre", "temizleme yağı"]}, (False, False)),  # v2'deki a03
+    ({"estimated_hours": None, "parts": []}, (False, False)),
+])
+def test_draft_checks_compare_with_the_manual(order, expected):
+    r = draft_checks(draft_step(**order), SPECS)
+    assert (r["taslak_sure_dogru"], r["taslak_parca_dogru"]) == expected
+
+
+def test_draft_checks_without_a_draft():
+    assert draft_checks([], SPECS) == {"taslak_sure_dogru": None, "taslak_parca_dogru": None}

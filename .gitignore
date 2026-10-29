@@ -9,3 +9,6 @@ data/*.duckdb.wal
 data/*.sqlite
 models/*
 !models/.gitkeep
+# Eğitilmiş model ve ölçümleri yayına alma için repoda durur (veri değil, veriden türetilmiş model)
+!models/risk_model.txt
+!models/metrics.json

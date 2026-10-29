@@ -12,7 +12,7 @@ Built on the Microsoft Azure Predictive Maintenance dataset (hourly telemetry, e
 
 1. **Predict.** A LightGBM model scores every machine: probability of a component failure in the next 24 hours, the most likely component, and the three features that pushed the score up (SHAP values).
 2. **Investigate.** Ask the agent "Makine 20 neden riskli, ne yapmalıyım?" ("Why is machine 20 at risk, what should I do?"). It reads the machine report, compares sensors with their 30-day normal, checks recent error codes and component ages, and searches the manual.
-3. **Act, with a human in the loop.** For high-risk machines the agent drafts a work order (steps, parts, time, manual section). Priority comes from a fixed rule in code, not from the LLM. Only a person can approve or reject the draft.
+3. **Act, with a human in the loop.** For high-risk machines the agent drafts a work order (steps, parts, time, manual section). Priority comes from a fixed rule in code, and time and parts are copied from the manual by code; the LLM writes only the reason and the steps. Only a person can approve or reject the draft.
 
 ## Results
 
@@ -110,6 +110,7 @@ flowchart TD
 - **The LLM proposes, code and people decide.** Work order priority comes from the manual's rule (80% or more is urgent, 50-80% high), the agent has no approve tool, and a second draft for the same machine and component returns the open one.
 - **Mistakes go back to the model; bugs do not.** An unknown tool, malformed arguments or an unknown machine return an error message the model can act on. Other exceptions are not sent to the model: the API logs them and shows a generic error, so real bugs are not hidden. Tool names are checked against a list, so the model cannot call internal methods such as the SQL helper.
 - **The manual is fictional but tied to the data.** The dataset does not say what comp1-4 are, so names and procedures are invented. The symptoms are not: before each failure type one sensor drifts (comp1 voltage +11%, comp2 rotation -17%, comp3 pressure +23%, comp4 vibration +24%) with its own error code, computed from all 761 failures.
+- **A public demo on a free quota.** Live questions are limited per IP per hour and per day, so one visitor cannot use up the day's tokens. The suggested questions replay recorded real runs instantly; the panel says when a run is a recording.
 - **Dashboard colour follows control-room practice (ISA-101).** Normal is grey, colour is kept for abnormal states, so the three failing machines stand out among a hundred.
 
 ## Limitations
@@ -139,6 +140,7 @@ python scripts/ablation.py         # the ablation table above
 python scripts/ask.py "Makine 20 neden riskli, ne yapmalıyım?"
 python scripts/eval_retrieval.py   # manual search comparison above
 python scripts/eval_agent.py       # agent evaluation (resumes where it stopped)
+python scripts/record_examples.py  # record the demo runs replayed by the suggested questions
 uvicorn maintagent.api:create_app --factory --reload   # API on :8000, docs at /docs
 ```
 
@@ -150,7 +152,13 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
-Tests: `pytest` runs 72 tests on generated data with the same schema, so no Kaggle download or API key is needed.
+Tests: `pytest` runs 86 tests on generated data with the same schema, so no Kaggle download or API key is needed.
+
+## Deploy
+
+- **API:** a Docker Space on Hugging Face. Upload `deploy/huggingface/Dockerfile` and `deploy/huggingface/README.md` to a new Docker Space; the build clones this repository. On start, `deploy/start.sh` downloads the dataset from Kaggle (it is not stored in the image) and builds the database.
+  Secrets: `GROQ_API_KEY`, `KAGGLE_API_TOKEN` (or the legacy `KAGGLE_USERNAME` + `KAGGLE_KEY`). Variables: `CORS_ORIGINS` (the dashboard URL), `LIVE_PER_IP_PER_HOUR`, `LIVE_PER_DAY`.
+- **Dashboard:** Vercel, root directory `frontend`, with `NEXT_PUBLIC_API_URL` set to the Space URL.
 
 ## Project layout
 
@@ -160,6 +168,7 @@ scripts/         command-line entry points (load, train, ablation, ask, evaluati
 data/manual/     maintenance manual and search test questions
 data/eval/       agent scenarios and results
 frontend/        Next.js dashboard
+deploy/          Hugging Face Space files and start script
 tests/           pytest suite
 ```
 

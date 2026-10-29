@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from maintagent import config  # noqa: E402
-from maintagent.manual import ManualSearch, load_chunks, rrf, tokenize  # noqa: E402
+from maintagent.manual import ManualSearch, component_specs, load_chunks, rrf, tokenize  # noqa: E402
 from maintagent.tools import COMP_TR  # noqa: E402
 
 SECTIONS = ["Görevi", "Arıza belirtileri", "Olası nedenler", "Kontrol adımları",
@@ -105,3 +105,10 @@ def test_build_search_falls_back_to_bm25_without_embeddings(chunks, monkeypatch)
     monkeypatch.setattr(manual_mod, "e5_embedder", missing)
     search, method = manual_mod.build_search(chunks, "hybrid")
     assert method == "bm25" and search.method == "bm25"
+
+
+def test_component_specs_are_read_from_the_manual(chunks):
+    specs = component_specs(chunks)
+    assert {c: s["saat"] for c, s in specs.items()} == {"comp1": 2.0, "comp2": 4.0, "comp3": 3.0, "comp4": 2.0}
+    assert specs["comp3"]["parcalar"] == ["valf bloğu (stok kodu HV-03)", "conta seti", "hidrolik filtre"]
+    assert specs["comp1"]["ekip"] == "1 elektrik teknisyeni"

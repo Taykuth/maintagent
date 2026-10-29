@@ -29,7 +29,7 @@ import pandas as pd
 
 from maintagent.agent import LLM, evidence, run_agent
 from maintagent.grounding import invented_units, missing_sections, numbers_in_text, ungrounded_numbers
-from maintagent.manual import ManualSearch
+from maintagent.manual import ManualSearch, component_specs
 from maintagent.tools import Toolbox
 from maintagent.work_orders import WorkOrderStore
 
@@ -126,7 +126,30 @@ def predicted_component(answer: str, steps: list[dict]) -> str | None:
     return m.group(0) if m else None
 
 
-def score(sc: dict, question: str, result, events: list[dict], model_pred: dict) -> dict:
+def _part_in_manual(part: str, manual_parts: list[str]) -> bool:
+    """Parça kılavuzda geçiyor mu? Stok kodu ya da adıyla eşleşme yeter ("GU-01" = "güç ünitesi (stok kodu GU-01)")."""
+    norm = lambda x: re.sub(r"\(.*?\)|stok kodu", "", x.lower()).strip()  # noqa: E731
+    code = re.search(r"[A-Z]{2}-\d{2}", part)
+    return any((code and code.group(0) in m) or (norm(part) and (norm(part) in norm(m) or norm(m) in norm(part)))
+               for m in manual_parts)
+
+
+def draft_checks(steps: list[dict], specs: dict) -> dict:
+    """İş emri taslağındaki süre ve parçalar kılavuzla aynı mı? Taslak yoksa None.
+
+    v2'ye kadar kontroller sadece cevap metnine bakıyordu; uydurma süre ve parça taslakta kalabiliyordu.
+    """
+    draft = next((s["result"]["is_emri"] for s in steps
+                  if s["tool"] == "draft_work_order" and isinstance(s["result"].get("is_emri"), dict)), None)
+    if draft is None or draft.get("component") not in specs:
+        return {"taslak_sure_dogru": None, "taslak_parca_dogru": None}
+    spec = specs[draft["component"]]
+    hours, parts = draft.get("estimated_hours"), draft.get("parts") or []
+    return {"taslak_sure_dogru": hours is not None and abs(float(hours) - spec["saat"]) < 1e-9,
+            "taslak_parca_dogru": bool(parts) and all(_part_in_manual(str(x), spec["parcalar"]) for x in parts)}
+
+
+def score(sc: dict, question: str, result, events: list[dict], model_pred: dict, specs: dict | None = None) -> dict:
     as_of = datetime.fromisoformat(sc["as_of"])
     drafts = [s for s in result.steps if s["tool"] == "draft_work_order" and "is_emri" in s["result"]]
     comp = predicted_component(result.answer, result.steps)
@@ -157,6 +180,7 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict)
         "sure_sn": round(result.seconds, 1),
         "durdu": result.stopped_early,
         "cevap": result.answer,
+        **draft_checks(result.steps, specs or {}),
         # Sonradan yeniden puanlayabilmek için araç çıktıları da saklanır
         "araclar": [{"tool": s["tool"], "arguments": s["arguments"], "result": s["result"]} for s in result.steps],
     }
@@ -172,7 +196,7 @@ def run_scenario(sc: dict, con: duckdb.DuckDBPyConnection, model_dir: Path, manu
     kwargs = {"sleep": sleep} if sleep else {}
     result = run_agent(question, toolbox, llm, on_event=events.append, **kwargs)
     model_pred = toolbox.predict_failure_risk(sc["machine_id"])  # aynı anda modelin kendi tahmini (LLM'siz)
-    return score(sc, question, result, events, model_pred)
+    return score(sc, question, result, events, model_pred, component_specs(manual.chunks))
 
 
 # --- Özet ------------------------------------------------------------------------
@@ -181,7 +205,12 @@ def _rate(part: int, whole: int) -> str:
     return f"{part}/{whole} (%{round(100 * part / whole)})" if whole else "-"
 
 
-def summarize(records: list[dict]) -> str:
+def summarize(records: list[dict], specs: dict | None = None) -> str:
+    """Özet tablo. specs verilirse eski kayıtların taslak kontrolleri saklanan araç çıktılarından hesaplanır."""
+    if specs:
+        records = [{**r, **draft_checks(r.get("araclar", []), specs)} if "taslak_sure_dogru" not in r else r
+                   for r in records]
+    drafted = [r for r in records if r.get("taslak_sure_dogru") is not None]
     pos = [r for r in records if r["tur"] == "ariza"]
     hard = [r for r in records if r["tur"] == "hatali_arizasiz"]
     quiet = [r for r in records if r["tur"] == "sakin"]
@@ -194,6 +223,8 @@ def summarize(records: list[dict]) -> str:
         ("Ajan, modelin bileşenini doğru aktardı", _rate(sum(r["ajan_bilesen"] == r["model_bilesen"] for r in risky),
                                                          len(risky))),
         ("Arızada iş emri taslağı açıldı", _rate(sum(r["taslak"] for r in pos), len(pos))),
+        ("Taslakta süre kılavuzla aynı", _rate(sum(r["taslak_sure_dogru"] for r in drafted), len(drafted))),
+        ("Taslaktaki parçalar kılavuzda var", _rate(sum(r["taslak_parca_dogru"] for r in drafted), len(drafted))),
         ("Yanlış alarm: hatalı-arızasız", _rate(sum(r["yanlis_alarm"] for r in hard), len(hard))),
         ("Yanlış alarm: sakin", _rate(sum(r["yanlis_alarm"] for r in quiet), len(quiet))),
         ("Doğrulama ilk cevabı düzelttirdi", _rate(sum(bool(r.get("dogrulama")) for r in records), len(records))),
