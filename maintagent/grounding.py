@@ -21,6 +21,12 @@ NUMBER_PATTERN = re.compile(r"(?<![\w.\-])\d+(?:[.,]\d+)?")
 
 REQUIRED_SECTIONS = ("Durum", "Kanıt", "Öneri")
 
+# "Taslak hazırlandı, onay bekliyor", "İş emri #3" gibi, bir taslağın var olduğunu söyleyen ifadeler.
+# "taslak oluşturulmalı" ya da "taslak gerekmiyor" eşleşmez: bunlar bir iddia değil, öneri.
+DRAFT_CLAIM = re.compile(
+    r"(?:tasla(?:k|ğı)|iş emri)[^.\n]{0,40}?(?:onay bekl|hazırlandı|hazır\b|oluşturuldu)|(?:iş emri|taslak)\s*#\d+",
+    re.IGNORECASE)
+
 
 def numbers_in_text(text: str) -> list[float]:
     """Metindeki sayılar. Türkçe ondalık virgülü de okunur: '15,2' -> 15.2."""
@@ -75,3 +81,12 @@ def invented_units(answer: str) -> list[str]:
 
 def missing_sections(answer: str) -> list[str]:
     return [s for s in REQUIRED_SECTIONS if s not in answer]
+
+
+def claims_draft(answer: str) -> bool:
+    """Cevap bir iş emri taslağının hazırlandığını söylüyor mu?
+
+    Kayıtlı bir filo sorusunda model, hiç taslak oluşturmadığı halde "taslak onay bekliyor"
+    yazdı. Sayı kontrolü bunu yakalamaz; araç çağrısı olmadan iddia edilen bir eylemdir.
+    """
+    return bool(DRAFT_CLAIM.search(answer))

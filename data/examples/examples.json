@@ -790,20 +790,15 @@
   "id": "en-riskli-3",
   "question": "Şu an en riskli 3 makine hangileri?",
   "as_of": "2015-10-01 00:00:00",
-  "recorded_at": "2026-11-02T18:04",
+  "recorded_at": "2026-11-02T19:30",
   "llm": "openai/gpt-oss-120b",
   "manual_search": "hybrid",
   "events": [
    {
-    "type": "waiting",
-    "seconds": 2.0,
-    "t": 0.11
-   },
-   {
     "type": "tool_call",
     "tool": "rank_machines_by_risk",
     "arguments": "{\"top_n\":3}",
-    "t": 2.46
+    "t": 0.99
    },
    {
     "type": "tool_result",
@@ -832,33 +827,23 @@
       }
      ]
     },
-    "ms": 50,
-    "t": 2.51
-   },
-   {
-    "type": "waiting",
-    "seconds": 2.0,
-    "t": 2.58
+    "ms": 70,
+    "t": 1.06
    },
    {
     "type": "revise",
     "eksik_bolumler": [
      "Öneri"
     ],
-    "t": 5.3
-   },
-   {
-    "type": "waiting",
-    "seconds": 10.0,
-    "t": 5.38
+    "t": 1.62
    },
    {
     "type": "answer",
-    "content": "**Durum:** En riskli 3 makine: 20, 37, 66.  \n\n**Kanıt:**  \n- Makine 20 – arıza riski %100, en olası bileşen comp2 (ana mil rulmanı).  \n- Makine 37 – arıza riski %100, en olası bileşen comp4 (motor‑mil kaplini).  \n- Makine 66 – arıza riski %100, en olası bileşen comp1 (güç ünitesi).  \n\n**Öneri:** Risk %50’nin üzerinde olduğu için ilgili bileşenler için kılavuzdaki kontrol adımları hazırlanmalı, toplam bakım süresi ve gerekli parçalar belirlenerek iş emri taslağı oluşturulmalı; taslak onay bekliyor.",
-    "tokens": 3752,
-    "seconds": 16.2,
+    "content": "**Durum:** En riskli 3 makine: 20, 37, 66.  \n\n**Kanıt:**  \n- Makine 20 – arıza riski %100, en olası bileşen comp2 (ana mil rulmanı).  \n- Makine 37 – arıza riski %100, en olası bileşen comp4 (motor‑mil kaplini).  \n- Makine 66 – arıza riski %100, en olası bileşen comp1 (güç ünitesi).  \n\n**Öneri:** Risk %50’nin üzerinde olduğu için ilgili bileşenler için kılavuzdaki kontrol adımları hazırlanacak, taslak iş emri oluşturulacak; “taslak hazırlandı, onay bekliyor”.",
+    "tokens": 3718,
+    "seconds": 2.8,
     "stopped_early": false,
-    "t": 16.2
+    "t": 2.79
    }
   ]
  }

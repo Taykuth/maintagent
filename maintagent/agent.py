@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from maintagent.grounding import invented_units, missing_sections, numbers_in_text, ungrounded_numbers
+from maintagent.grounding import claims_draft, invented_units, missing_sections, numbers_in_text, ungrounded_numbers
 from maintagent.tools import TOOL_SCHEMAS, Toolbox
 
 MAX_STEPS = 10
@@ -277,9 +277,11 @@ def answer_problems(question: str, answer: str, steps: list[dict], as_of) -> dic
     """Cevaptaki dayanaksız sayılar, uydurma birimler ve eksik bölümler. Sorun yoksa boş sözlük."""
     extra = {float(as_of.year), float(as_of.month), float(as_of.day), float(as_of.hour)}
     extra |= set(numbers_in_text(question))
+    drafted = any(s["tool"] == "draft_work_order" and isinstance(s["result"].get("is_emri"), dict) for s in steps)
     problems = {"sayilar": ungrounded_numbers(answer, evidence(steps), extra),
                 "birimler": invented_units(answer),
-                "eksik_bolumler": missing_sections(answer)}
+                "eksik_bolumler": missing_sections(answer),
+                "olmayan_taslak": claims_draft(answer) and not drafted}
     return {k: v for k, v in problems.items() if v}
 
 
@@ -293,6 +295,9 @@ def _revise_message(problems: dict) -> str:
         lines.append(f"- Veride birim yok, şunları kaldır: {', '.join(problems['birimler'])}.")
     if "eksik_bolumler" in problems:
         lines.append(f"- Eksik bölüm: {', '.join(problems['eksik_bolumler'])}. Biçim: **Durum:**, **Kanıt:**, **Öneri:**.")
+    if "olmayan_taslak" in problems:
+        lines.append("- Cevap bir iş emri taslağının hazırlandığını söylüyor ama draft_work_order çağrılmadı. "
+                     "Taslak yoksa varmış gibi yazma.")
     lines.append("Yeni sayı ekleme; cevabı aynı biçimde yeniden yaz.")
     return "\n".join(lines)
 

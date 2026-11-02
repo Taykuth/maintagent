@@ -23,7 +23,7 @@ type Step =
   | { kind: "nudge"; missing: Record<string, string[]> }
   | { kind: "waiting"; seconds: number }
   | { kind: "tool_error"; message: string }
-  | { kind: "revise"; numbers: number[]; units: string[]; sections: string[] }
+  | { kind: "revise"; numbers: number[]; units: string[]; sections: string[]; phantomDraft: boolean }
   | { kind: "error"; message: string };
 
 type Replay = Extract<AgentEvent, { type: "replay" }>;
@@ -160,7 +160,13 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
       case "revise":
         setSteps((s) => [
           ...s,
-          { kind: "revise", numbers: e.sayilar ?? [], units: e.birimler ?? [], sections: e.eksik_bolumler ?? [] },
+          {
+            kind: "revise",
+            numbers: e.sayilar ?? [],
+            units: e.birimler ?? [],
+            sections: e.eksik_bolumler ?? [],
+            phantomDraft: e.olmayan_taslak ?? false,
+          },
         ]);
         break;
       case "replay":
@@ -438,6 +444,7 @@ function StepBody({ step }: { step: Step }) {
           {step.numbers.length > 0 && ` Araç çıktısında olmayan sayılar: ${step.numbers.map(fmt).join("; ")}.`}
           {step.units.length > 0 && ` Veride olmayan birimler: ${step.units.join(", ")}.`}
           {step.sections.length > 0 && ` Eksik bölüm: ${step.sections.join(", ")}.`}
+          {step.phantomDraft && " Cevap, hazırlanmamış bir iş emri taslağından söz ediyordu."}
         </p>
       </div>
     );

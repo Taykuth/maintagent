@@ -257,3 +257,29 @@ def test_agent_stops_at_step_limit(toolbox):
     llm = ScriptedLLM([call("rank_machines_by_risk")] * 3)
     res = run_agent("?", toolbox, llm, max_steps=3)
     assert res.stopped_early and len(res.steps) == 3
+
+
+def test_answer_claiming_a_draft_that_was_never_made_is_revised(toolbox):
+    """Kayıtlı bir filo sorusunda model taslak oluşturmadan 'taslak onay bekliyor' yazdı."""
+    llm = ScriptedLLM([
+        call("rank_machines_by_risk", top_n=3),
+        answer(FORMATTED.format("En riskli makineler sıralandı; taslak onay bekliyor.")),
+        answer(FORMATTED.format("En riskli makineler sıralandı; taslak oluşturulmadı.")),
+    ])
+    events = []
+    res = run_agent("En riskli 3 makine?", toolbox, llm, on_event=events.append, draft_threshold=101)
+    assert [e.get("olmayan_taslak") for e in events if e["type"] == "revise"] == [True]
+    assert "draft_work_order" in llm.seen[2][-1]["content"]
+    assert "taslak oluşturulmadı" in res.answer
+
+
+def test_answer_mentioning_a_real_draft_passes(toolbox):
+    llm = ScriptedLLM([
+        call("get_machine_report", machine_id=1),
+        call("search_manual", query="rulman"),
+        call("draft_work_order", machine_id=1, component="comp2", reason="r", steps=["Kilitle"]),
+        answer(FORMATTED.format("Taslak hazırlandı, onay bekliyor.")),
+    ])
+    events = []
+    run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=0)
+    assert not [e for e in events if e["type"] == "revise"]

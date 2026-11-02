@@ -6,6 +6,7 @@ Her kayıt gerçek bir çalıştırmadır; elle düzenlenmez. Yaklaşık 5 soru 
 Kullanım:
     python scripts/record_examples.py            # eksik örnekleri kaydeder
     python scripts/record_examples.py --again    # hepsini yeniden kaydeder
+    python scripts/record_examples.py --only en-riskli-3   # sadece bunları yeniden kaydeder (virgülle)
 """
 
 import argparse
@@ -39,12 +40,19 @@ QUESTIONS = {
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--again", action="store_true", help="Var olan kayıtları da yeniden al")
+    ap.add_argument("--only", default="", help="Sadece bu örnekleri yeniden kaydet, virgülle: en-riskli-3,makine-37")
     args = ap.parse_args()
 
     path = config.EXAMPLES_PATH
     examples = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
     have = {e["id"] for e in examples if e.get("as_of") == str(config.AS_OF)}
     todo = {k: q for k, q in QUESTIONS.items() if args.again or k not in have}
+    if args.only:
+        unknown = set(args.only.split(",")) - set(QUESTIONS)
+        if unknown:
+            print(f"Bilinmeyen örnek: {', '.join(sorted(unknown))}. Seçenekler: {', '.join(QUESTIONS)}")
+            return 1
+        todo = {k: q for k, q in QUESTIONS.items() if k in args.only.split(",")}
     if not todo:
         print("Bütün örnekler zaten kayıtlı. Yeniden almak için --again.")
         return 0

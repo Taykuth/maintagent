@@ -50,25 +50,43 @@ The agent is tested on 24 moments from the test period. At each one it sees the 
 
 Each answer is scored in code: right component, work order drafted or not, every number traceable to a tool output, no invented units, answer format. Script: `scripts/eval_agent.py`, scenarios: `data/eval/agent_scenarios.json`, per-run results: `data/eval/`.
 
-First run (v1, `openai/gpt-oss-120b` on Groq, low reasoning effort):
+Three versions, all with `openai/gpt-oss-120b` on Groq (low reasoning effort) and BM25 manual search. v1 and v2 ran all 24 scenarios:
 
-| Check | v1 |
-|---|---|
-| Correct component on failures (agent / model alone) | 12/12 / 12/12 |
-| Work order drafted before a failure | 12/12 |
-| False alarms (error but no failure / quiet) | 0/6 / 0/6 |
-| Answers with a number not found in any tool output | about 8/24 |
-| Answers with an invented unit (rpm, V, bar, mm/s) | 13/24 |
-| Code-level step check had to intervene | 24/24 |
-| Tokens per question (median / max) | 9,192 / 10,622 |
+| Check | v1 | v2 |
+|---|---|---|
+| Correct component on failures (agent / model alone) | 12/12 / 12/12 | 12/12 / 12/12 |
+| Work order drafted before a failure | 12/12 | 12/12 |
+| False alarms (error but no failure / quiet) | 0/6 / 0/6 | 0/6 / 0/6 |
+| Answers with a number not found in any tool output | about 8/24 | 0/24 |
+| Answers with an invented unit (rpm, V, bar, mm/s) | 13/24 | 0/24 |
+| Answer check sent the answer back | (no check yet) | 0/24 |
+| Code-level step check had to intervene | 24/24 | 7/24 |
+| Tokens per question (median / max) | 9,192 / 10,622 | 7,041 / 10,950 |
 
-The component and false-alarm rows mostly measure the model: on this data the model alone is already right on all 12 failures and gives 0% risk on all 12 negatives. The agent's own contribution shows in the other rows, and those exposed real problems:
+The component and false-alarm rows mostly measure the model: on this data the model alone is already right on all 12 failures and gives 0% risk on all 12 negatives. The agent's own contribution shows in the other rows, and v1 exposed real problems:
 
-- **Invented numbers.** Per-step durations ("≈15 dk") that are not in the manual, sums the model calculated itself, and units the data does not have. My first checker also had two bugs (it flagged "0.6% below" when the tool said -0.6, and it did not catch "V"); the numbers above are re-scored with the fixed checker.
+- **Invented numbers.** Per-step durations ("≈15 dk") that are not in the manual, sums the model calculated itself, and units the data does not have. My first checker also had two bugs (it flagged "0.6% below" when the tool said -0.6, and it did not catch "V"); the v1 numbers are re-scored with the fixed checker.
 - **Prompt rules were not enough.** In every run the model tried to answer before finishing the required steps, and the check in the loop sent it back.
 - **Advice for healthy machines.** The step check required a manual search for every machine, so the agent recommended full inspection procedures for machines at 0% risk.
 
-Changes in v2: the manual search and the draft are required only above the 50% risk threshold; the prompt forbids per-step times, units and arithmetic; and a new check in the loop runs the same number and unit test on the answer before the user sees it, sending it back once with the exact numbers to remove. v2 results are written to `data/eval/agent_summary_v2.md`.
+Changes in v2: the manual search and the draft are required only above the 50% risk threshold; the prompt forbids per-step times, units and arithmetic; and a new check in the loop runs the same number and unit test on the answer before the user sees it, sending it back once with the exact numbers to remove.
+
+v2 left one problem the first table did not measure: the time and parts the model wrote into the work order draft. When the manual search did not return the "time, parts and priority" section, the model left the time empty or made it up (2 hours instead of 3, plus a part the manual does not list). In v3 the model writes only the reason and the steps; code copies time and parts from the parsed manual, the same way priority already came from a rule in code. v3 changed only the draft, so it was re-run on the 12 failure scenarios:
+
+| Check (12 failure scenarios) | v2 | v3 |
+|---|---|---|
+| Draft time matches the manual | 7/12 | 12/12 |
+| Draft parts are all in the manual | 7/12 | 12/12 |
+| Answers with an ungrounded number / invented unit | 0/12 / 0/12 | 0/12 / 0/12 |
+| Tool call rejected by the provider (schema) | at least 2/12 | 0/12 |
+| Code-level step check had to intervene | 7/12 | 6/12 |
+| Tokens per question (median / max) | 10,129 / 10,950 | 9,552 / 10,533 |
+
+The draft rows are now 12/12 by construction: they check that the code path works, not that the model got better. That is the point; the model can no longer get them wrong. The step check row is the honest weak spot: in half the failure runs the model still tries to answer before searching the manual and drafting, and the loop sends it back. Those runs cost about 10,000 tokens instead of about 7,000. Making those two steps a fixed workflow in code above the risk threshold would remove the extra round, at the cost of a less free agent; I kept the check because it shows when the model drifts.
+
+Recording the demo runs exposed one more failure. Asked for the three riskiest machines, the model wrote that "the draft is waiting for approval" without having drafted anything. The number check cannot see this: it is a claimed action, not a number. The answer check now also sends back an answer that claims a draft when no `draft_work_order` call succeeded. Run over all stored answers, the rule flags that demo answer and one v1 answer, and nothing in v2 or v3.
+
+Per-run results and summaries: `data/eval/agent_runs_v*.jsonl`, `data/eval/agent_summary_v*.md`.
 
 ### Manual search
 
@@ -92,9 +110,9 @@ flowchart TD
   F --> M[LightGBM risk model + SHAP]
   DB --> T[Agent tools]
   M --> T
-  K[Maintenance manual, BM25] --> T
+  K[Maintenance manual, BM25 + e5 hybrid search] --> T
   T <--> A[Agent loop, Groq gpt-oss-120b]
-  A --> C[Checks in code: steps, numbers, units]
+  A --> C[Checks in code: steps, numbers, units, claimed drafts]
   C --> API[FastAPI, server-sent events]
   T --> WO[(Work orders, SQLite)]
   API --> UI[Next.js dashboard]
@@ -155,7 +173,7 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
-Tests: `pytest` runs 87 tests on generated data with the same schema, so no Kaggle download or API key is needed.
+Tests: `pytest` runs 89 tests on generated data with the same schema, so no Kaggle download or API key is needed.
 
 ## Deploy
 
