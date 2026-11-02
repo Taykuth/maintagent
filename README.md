@@ -4,6 +4,8 @@
 
 A maintenance assistant for a fleet of 100 industrial machines. A gradient-boosted model predicts which component will fail in the next 24 hours. An LLM agent then pulls the evidence with tools, looks up the repair procedure in a maintenance manual, and drafts a work order. The draft does nothing until a person approves it.
 
+**Live demo: [maintagent.vercel.app](https://maintagent.vercel.app)**. It shows the model's real outputs and recorded runs of the real agent; to ask your own questions, run it locally (see [Run it](#run-it)).
+
 ![Dashboard: fleet ranked by risk, sensor trends for the selected machine, agent panel](docs/dashboard.png)
 
 Built on the Microsoft Azure Predictive Maintenance dataset (hourly telemetry, error logs, maintenance and failure records for 100 machines in 2015). The UI and the agent speak Turkish; this write-up is in English.
