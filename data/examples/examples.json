@@ -790,7 +790,7 @@
   "id": "en-riskli-3",
   "question": "Şu an en riskli 3 makine hangileri?",
   "as_of": "2015-10-01 00:00:00",
-  "recorded_at": "2026-11-02T19:30",
+  "recorded_at": "2026-11-02T20:59",
   "llm": "openai/gpt-oss-120b",
   "manual_search": "hybrid",
   "events": [
@@ -798,7 +798,7 @@
     "type": "tool_call",
     "tool": "rank_machines_by_risk",
     "arguments": "{\"top_n\":3}",
-    "t": 0.99
+    "t": 0.68
    },
    {
     "type": "tool_result",
@@ -827,23 +827,16 @@
       }
      ]
     },
-    "ms": 70,
-    "t": 1.06
-   },
-   {
-    "type": "revise",
-    "eksik_bolumler": [
-     "Öneri"
-    ],
-    "t": 1.62
+    "ms": 80,
+    "t": 0.76
    },
    {
     "type": "answer",
-    "content": "**Durum:** En riskli 3 makine: 20, 37, 66.  \n\n**Kanıt:**  \n- Makine 20 – arıza riski %100, en olası bileşen comp2 (ana mil rulmanı).  \n- Makine 37 – arıza riski %100, en olası bileşen comp4 (motor‑mil kaplini).  \n- Makine 66 – arıza riski %100, en olası bileşen comp1 (güç ünitesi).  \n\n**Öneri:** Risk %50’nin üzerinde olduğu için ilgili bileşenler için kılavuzdaki kontrol adımları hazırlanacak, taslak iş emri oluşturulacak; “taslak hazırlandı, onay bekliyor”.",
-    "tokens": 3718,
-    "seconds": 2.8,
+    "content": "**Durum:** En riskli 3 makine: 20, 37, 66.\n\n**Kanıt:**\n- Makine 20 – arıza riski %100, en olası bileşen comp2 (ana mil rulmanı).\n- Makine 37 – arıza riski %100, en olası bileşen comp4 (motor‑mil kaplini).\n- Makine 66 – arıza riski %100, en olası bileşen comp1 (güç ünitesi).\n\n**Öneri:** Risk %50’nin üstünde. Her bir makine için ilgili bileşenin kontrol adımlarını kılavuzda arayın ve **draft_work_order** ile iş emri taslağı oluşturun (adımlar, toplam süre, gerekli parçalar ve kaynak bölümü taslakta yer alacak). Ayrıntılı bilgi almak isterseniz tek tek makine sorabilirsiniz.",
+    "tokens": 2372,
+    "seconds": 1.6,
     "stopped_early": false,
-    "t": 2.79
+    "t": 1.64
    }
   ]
  }

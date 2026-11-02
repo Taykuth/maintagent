@@ -45,7 +45,9 @@ Kurallar:
 - Bir makine sorulursa önce get_machine_report çağır.
 - Risk %{threshold:.0f} veya üstündeyse: search_manual ile en olası bileşenin kontrol adımlarına bak, sonra
   draft_work_order ile iş emri taslağı oluştur. Süre ve parçaları taslak sonucundan al. Taslak bakım şefinin
-  onayını bekler: "iş emri verildi" deme, "taslak hazırlandı, onay bekliyor" de.
+  onayını bekler; iş emri verilmiş gibi yazma. draft_work_order çağırmadıysan taslaktan söz etme.
+- Filo sorusunda (ör. en riskli makineler) sıralamayı ver; taslak açma, ayrıntı için makinenin tek tek
+  sorulabileceğini söyle.
 - Risk %{threshold:.0f}'nin altındaysa iş emri ve bakım prosedürü önerme; "acil işlem gerekmiyor, planlı bakıma
   devam" de. Belirgin sapan sensör varsa izlenmesini öner.
 - Süre olarak sadece kılavuzdaki toplam süreyi yaz; adım başına süre yazma.
@@ -190,12 +192,15 @@ def run_agent(question: str, toolbox: Toolbox, llm: LLM,
                 continue
             problems = answer_problems(question, reply["content"], steps, toolbox.as_of) if verify_answer else {}
             if problems and not revised:
-                # Cevap kullanıcıya gitmeden bir kez düzelttirilir; ikinci cevap ne olursa kabul edilir.
+                # Cevap kullanıcıya gitmeden bir kez düzelttirilir.
                 revised = True
                 emit({"type": "revise", **problems})
                 messages.append({"role": "assistant", "content": reply["content"]})
                 messages.append({"role": "user", "content": _revise_message(problems)})
                 continue
+            if problems:
+                # Düzeltmeden sonra da sorun kaldı. Cevap gösterilir ama sessizce geçmez: kullanıcı uyarıyı görür.
+                emit({"type": "unverified", **problems})
             return finish(reply["content"])
 
         messages.append({"role": "assistant", "content": reply["content"], "tool_calls": [

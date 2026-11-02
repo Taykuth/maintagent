@@ -157,6 +157,7 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict,
     extra = {float(sc["machine_id"]), float(as_of.year), float(as_of.month), float(as_of.day), float(as_of.hour)}
     extra |= set(numbers_in_text(question))
     revise = next((e for e in events if e["type"] == "revise"), None)
+    unverified = next((e for e in events if e["type"] == "unverified"), None)
     return {
         **sc,
         "model_risk": model_pred["ariza_riski_24_saat_yuzde"],
@@ -172,6 +173,7 @@ def score(sc: dict, question: str, result, events: list[dict], model_pred: dict,
         "bicim_ok": not missing_sections(result.answer),
         # Doğrulamanın ilk cevapta yakaladıkları
         "dogrulama": {k: v for k, v in (revise or {}).items() if k != "type"},
+        "dogrulanamadi": {k: v for k, v in (unverified or {}).items() if k != "type"},
         "adim_kontrolu": any(e["type"] == "nudge" for e in events),
         "arac_reddi": sum(e["type"] == "tool_error" for e in events),  # sağlayıcının reddettiği araç çağrıları
         "bekleme_sn": sum(e["seconds"] for e in events if e["type"] == "waiting"),

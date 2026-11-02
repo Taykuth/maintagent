@@ -75,6 +75,7 @@ export type AgentEvent =
   | { type: "waiting"; seconds: number }
   | { type: "tool_error"; message: string }
   | { type: "revise"; sayilar?: number[]; birimler?: string[]; eksik_bolumler?: string[]; olmayan_taslak?: boolean }
+  | { type: "unverified"; sayilar?: number[]; birimler?: string[]; eksik_bolumler?: string[]; olmayan_taslak?: boolean }
   | { type: "answer"; content: string; tokens: number; seconds: number; stopped_early: boolean }
   | { type: "error"; message: string };
 

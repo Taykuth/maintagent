@@ -283,3 +283,17 @@ def test_answer_mentioning_a_real_draft_passes(toolbox):
     events = []
     run_agent("Makine 1?", toolbox, llm, on_event=events.append, draft_threshold=0)
     assert not [e for e in events if e["type"] == "revise"]
+
+
+def test_problem_left_after_the_revision_is_flagged(toolbox):
+    """Düzeltilen cevapta da sorun kalırsa cevap sessizce geçmez; 'unverified' olayı çıkar."""
+    llm = ScriptedLLM([
+        call("rank_machines_by_risk", top_n=3),
+        answer("eksik biçim"),
+        answer(FORMATTED.format("Sıralama hazır; taslak hazırlandı, onay bekliyor.")),
+    ])
+    events = []
+    res = run_agent("En riskli 3 makine?", toolbox, llm, on_event=events.append, draft_threshold=101)
+    assert [e["type"] for e in events if e["type"] in ("revise", "unverified")] == ["revise", "unverified"]
+    assert [e for e in events if e["type"] == "unverified"][0]["olmayan_taslak"] is True
+    assert "onay bekliyor" in res.answer

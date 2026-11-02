@@ -84,7 +84,7 @@ v2 left one problem the first table did not measure: the time and parts the mode
 
 The draft rows are now 12/12 by construction: they check that the code path works, not that the model got better. That is the point; the model can no longer get them wrong. The step check row is the honest weak spot: in half the failure runs the model still tries to answer before searching the manual and drafting, and the loop sends it back. Those runs cost about 10,000 tokens instead of about 7,000. Making those two steps a fixed workflow in code above the risk threshold would remove the extra round, at the cost of a less free agent; I kept the check because it shows when the model drifts.
 
-Recording the demo runs exposed one more failure. Asked for the three riskiest machines, the model wrote that "the draft is waiting for approval" without having drafted anything. The number check cannot see this: it is a claimed action, not a number. The answer check now also sends back an answer that claims a draft when no `draft_work_order` call succeeded. Run over all stored answers, the rule flags that demo answer and one v1 answer, and nothing in v2 or v3.
+Recording the demo runs exposed one more failure. Asked for the three riskiest machines, the model wrote that "the draft is waiting for approval" without having drafted anything. The number check cannot see this: it is a claimed action, not a number. The answer check now also sends back an answer that claims a draft when no `draft_work_order` call succeeded. Run over all stored answers, the rule flags that demo answer and one v1 answer, and nothing in v2 or v3. Re-recording that run then showed the limit of a single revision: the first answer missed a section, and the corrected one brought the claim back, quoting a phrase from my own prompt. The prompt no longer contains that phrase, and an answer that still fails a check after its one revision now reaches the user with a visible warning instead of passing silently.
 
 Per-run results and summaries: `data/eval/agent_runs_v*.jsonl`, `data/eval/agent_summary_v*.md`.
 
@@ -173,7 +173,7 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
-Tests: `pytest` runs 89 tests on generated data with the same schema, so no Kaggle download or API key is needed.
+Tests: `pytest` runs 90 tests on generated data with the same schema, so no Kaggle download or API key is needed.
 
 ## Deploy
 

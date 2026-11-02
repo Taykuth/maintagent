@@ -28,6 +28,17 @@ type Step =
 
 type Replay = Extract<AgentEvent, { type: "replay" }>;
 type Answer = Extract<AgentEvent, { type: "answer" }>;
+type Unverified = Extract<AgentEvent, { type: "unverified" }>;
+
+// Kontrolün bulduğu sorunların okunur listesi (düzeltme adımı ve düzeltilemeyen cevap uyarısı için)
+function problemText(p: { sayilar?: number[]; birimler?: string[]; eksik_bolumler?: string[]; olmayan_taslak?: boolean }) {
+  const parts: string[] = [];
+  if (p.sayilar?.length) parts.push(`araç çıktısında olmayan sayılar (${p.sayilar.map(fmt).join("; ")})`);
+  if (p.birimler?.length) parts.push(`veride olmayan birimler (${p.birimler.join(", ")})`);
+  if (p.eksik_bolumler?.length) parts.push(`eksik bölüm (${p.eksik_bolumler.join(", ")})`);
+  if (p.olmayan_taslak) parts.push("hazırlanmamış bir iş emri taslağından söz ediliyor");
+  return parts.join("; ");
+}
 
 const TOOL_NAMES: Record<string, string> = {
   get_machine_report: "Makine raporu",
@@ -102,6 +113,7 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
   const [asked, setAsked] = useState<string | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState<Answer | null>(null);
+  const [unverified, setUnverified] = useState<Unverified | null>(null);
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [running, setRunning] = useState(false);
   const [replay, setReplay] = useState<Replay | null>(null);
@@ -175,6 +187,9 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
       case "answer":
         setAnswer(e);
         break;
+      case "unverified":
+        setUnverified(e);
+        break;
       case "error":
         setSteps((s) => [...s, { kind: "error", message: e.message }]);
         break;
@@ -189,6 +204,7 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
     setAsked(text);
     setSteps([]);
     setAnswer(null);
+    setUnverified(null);
     setOrders([]);
     setReplay(null);
     setRunning(true);
@@ -296,6 +312,17 @@ export function AgentPanel({ machineId, llmName, liveLeft, onOrdersChanged, onLi
                 {answer.content}
               </Markdown>
             </div>
+            {unverified && (
+              <p className="mt-3 flex items-start gap-1.5 rounded-md border border-line-strong px-3 py-2 text-xs text-ink-2">
+                <span className="mt-0.5">
+                  <LevelIcon level="yuksek" />
+                </span>
+                <span>
+                  Otomatik kontrol bu cevapta düzeltilemeyen bir sorun buldu: {problemText(unverified)}. Bu kısmı
+                  araç çıktılarıyla karşılaştırarak oku.
+                </span>
+              </p>
+            )}
             <p className="tnum mt-3 text-xs text-ink-3">
               {toolCount} araç çağrısı, {fmt(answer.tokens)} token, {fmt(answer.seconds)} sn
               {answer.stopped_early ? ", adım sınırında durdu" : ""}
